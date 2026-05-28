@@ -100,7 +100,7 @@ export default function GfsDiskActionModal({
     <div className="ct-action-confirm-modal__body">
       {GFS_DISKS.map((disk) => (
         <div className="ct-gfs-disk-info" key={disk.id}>
-          <div><strong>디스크 마운트 상태</strong> Health Ok</div>
+          <div><strong>디스크 마운트 상태</strong> Health OK</div>
           <div><strong>마운트 경로</strong> {disk.mount}</div>
           <div><strong>물리 볼륨</strong> {disk.pv}</div>
           <div><strong>볼륨 그룹</strong> {disk.vg}</div>

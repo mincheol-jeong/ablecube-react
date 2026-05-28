@@ -325,16 +325,24 @@
   strong {
     white-space: nowrap;
   }
-
-  span {
-    min-width: 0;
-    overflow-wrap: anywhere;
-    line-height: 1.5;
-  }
 }
 
-.ct-gfs-mount-info-modal__row--top {
-  align-items: start;
+.ct-gfs-mount-info-modal__value,
+.ct-gfs-mount-info-modal__status-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.ct-gfs-mount-info-modal__status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ct-gfs-mount-info-modal__status-label {
+  flex: 0 0 auto;
 }
 
 .pf-v5-u-align-self-flex-start {

@@ -26,7 +26,6 @@ import {
   EllipsisVIcon,
 } from "@patternfly/react-icons";
 
-import cockpit from "cockpit";
 import ClvmDiskActionModal from "./clvm-disk-action-modal";
 import type { ClvmDiskAction } from "./clvm-disk-action-modal";
 import WwnListModal from "./wwn-list-modal";
@@ -34,11 +33,16 @@ import CheckedConfirmActionModal from "../components/common/CheckedConfirmAction
 import ConfirmActionModal from "../components/common/ConfirmActionModal";
 import MaintenanceModeConfirmModal from "../components/common/MaintenanceModeConfirmModal";
 import type { MaintenanceModeAction } from "../components/common/MaintenanceModeConfirmModal";
+import {
+  fetchStorageClusterStatus,
+  STORAGE_CLUSTER_STATUS_FALLBACK,
+  type StorageClusterStatusData,
+} from "../services/api/storage-cluster-status";
 import "./status-card.scss";
 
 const CLUSTER_STATUS_META = {
   HEALTH_OK: {
-    label: "Health Ok",
+    label: "Health OK",
     color: "green",
     icon: <CheckCircleIcon />,
   },
@@ -48,19 +52,10 @@ const CLUSTER_STATUS_META = {
     icon: <ExclamationTriangleIcon />,
   },
   HEALTH_ERR: {
-    label: "Health Error",
+    label: "Health Err",
     color: "red",
     icon: <ExclamationCircleIcon />,
   },
-};
-
-const FALLBACK_DATA = {
-  clusterStatus: "HEALTH_ERR",
-  diskStatus: "N/A",
-  gatewayStatus: "N/A",
-  daemonStatus: "N/A",
-  storagePools: "N/A",
-  storageCapacity: "N/A",
 };
 
 export default function StorageClusterStatus() {
@@ -76,26 +71,30 @@ export default function StorageClusterStatus() {
   const [isAutoShutdownModalOpen, setIsAutoShutdownModalOpen] = React.useState(false);
   const [isRemoveCubeHostModalOpen, setIsRemoveCubeHostModalOpen] = React.useState(false);
 
-  const [data, setData] = React.useState({
-    clusterStatus: "",
-    diskStatus: "",
-    gatewayStatus: "",
-    daemonStatus: "",
-    storagePools: "",
-    storageCapacity: "",
-  });
+  const [data, setData] = React.useState<StorageClusterStatusData>(STORAGE_CLUSTER_STATUS_FALLBACK);
 
   React.useEffect(() => {
-    cockpit
-      .spawn(["python3", "/root/ablecube-react/python/read_test_json.py"])
-      .then((stdout) => {
-        const parsed = JSON.parse(stdout);
-        setData(parsed["storage-cluster-status"]);
+    let isMounted = true;
+
+    fetchStorageClusterStatus()
+      .then((nextData) => {
+        if (isMounted) {
+          setData(nextData);
+          setIsMaintenance(nextData.maintenanceStatus);
+        }
       })
       .catch((err) => {
-        console.error("spawn error:", err);
-        setData(FALLBACK_DATA);
+        console.error("storage cluster status API error:", err);
+
+        if (isMounted) {
+          setData(STORAGE_CLUSTER_STATUS_FALLBACK);
+          setIsMaintenance(false);
+        }
       });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const statusMeta = (CLUSTER_STATUS_META as any)[data.clusterStatus] ?? {
@@ -105,10 +104,13 @@ export default function StorageClusterStatus() {
   };
 
   const isClusterError = data.clusterStatus === "HEALTH_ERR";
-  const footerMessage = isClusterError
-    ? "스토리지센터 클러스터가 구성되지 않았습니다."
-    : "스토리지센터 클러스터가 구성되었습니다.";
-  const footerColor = isClusterError ? "#c9190b" : "#3e8635";
+  const isClusterUnknown = data.clusterStatus === "N/A" || data.clusterStatus === "";
+  const footerMessage = isClusterUnknown
+    ? "스토리지센터 클러스터 상태 정보를 확인할 수 없습니다."
+    : isClusterError
+      ? "스토리지센터 클러스터가 구성되지 않았습니다."
+      : "스토리지센터 클러스터가 구성되었습니다.";
+  const footerColor = isClusterUnknown ? "#f0ab00" : isClusterError ? "#c9190b" : "#3e8635";
 
   const onSelect = () => setIsOpen(false);
 
@@ -355,7 +357,6 @@ export default function StorageClusterStatus() {
                 className="ct-health-label"
                 color={statusMeta.color}
                 icon={statusMeta.icon}
-                variant="outline"
               >
                 {statusMeta.label}
               </Label>

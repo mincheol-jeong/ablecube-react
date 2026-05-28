@@ -18,35 +18,18 @@ import {
 } from "@patternfly/react-core";
 import { EllipsisVIcon, StorageDomainIcon } from "@patternfly/react-icons";
 
-import cockpit from "cockpit";
 import ClvmDiskActionModal from "./clvm-disk-action-modal";
 import type { ClvmDiskAction } from "./clvm-disk-action-modal";
 import GfsDiskActionModal from "./gfs-disk-action-modal";
 import type { GfsDiskAction } from "./gfs-disk-action-modal";
 import GfsMountInfoModal from "./gfs-mount-info-modal";
 import type { GfsMountInfo } from "./gfs-mount-info-modal";
+import {
+  fetchGfsDiskStatus,
+  GFS_DISK_STATUS_FALLBACK,
+  type GfsDiskStatusData,
+} from "../services/api/gfs-disk-status";
 import "./status-card.scss";
-
-const DEFAULT_DATA = {
-  mode: "다중 모드",
-  mountPath: "/mnt/glue-gfs",
-  mountDetails: [
-    {
-      mountPath: "/mnt/glue-gfs",
-      status: "Health OK",
-      devices: "/dev/sdb, /dev/sdc",
-      multipaths: "mpathg",
-      physicalVolume: "vg_glue-gfs-lv_glue-gfs",
-      volumeGroup: "vg_glue-gfs",
-      diskSize: "500GB",
-      resourceStatus: [
-        "Started ( 10.10.13.1, 10.10.13.2, 10.10.13.3 )",
-      ],
-    },
-  ] as GfsMountInfo[],
-  footerMessage: "GFS 디스크가 생성되었습니다.",
-  footerColor: "#3e8635",
-};
 
 export default function GfsDiskStatus() {
   const [isOpen, setIsOpen] = React.useState(false);
@@ -54,26 +37,28 @@ export default function GfsDiskStatus() {
   const [clvmDiskAction, setClvmDiskAction] = React.useState<ClvmDiskAction | null>(null);
   const [selectedMountInfo, setSelectedMountInfo] = React.useState<GfsMountInfo | null>(null);
 
-  const [data, setData] = React.useState({
-    mode: "",
-    mountPath: "",
-    mountDetails: [] as GfsMountInfo[],
-    footerMessage: "",
-    footerColor: "",
-  });
+  const [data, setData] = React.useState<GfsDiskStatusData>(GFS_DISK_STATUS_FALLBACK);
 
   React.useEffect(() => {
-    cockpit
-      .spawn(["python3", "/root/ablecube-react/python/read_test_json.py"])
-      .then((stdout) => {
-        const parsed = JSON.parse(stdout);
-        const next = parsed["gfs-disk-status"] ?? {};
-        setData({ ...DEFAULT_DATA, ...next });
+    let isMounted = true;
+
+    fetchGfsDiskStatus()
+      .then((nextData) => {
+        if (isMounted) {
+          setData(nextData);
+        }
       })
       .catch((err) => {
-        console.error("spawn error:", err);
-        setData(DEFAULT_DATA);
+        console.error("gfs disk status API error:", err);
+
+        if (isMounted) {
+          setData(GFS_DISK_STATUS_FALLBACK);
+        }
       });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const onSelect = () => setIsOpen(false);
@@ -81,7 +66,16 @@ export default function GfsDiskStatus() {
   const mountDetails = data.mountDetails.length > 0
     ? data.mountDetails
     : data.mountPath
-      ? [{ ...DEFAULT_DATA.mountDetails[0], mountPath: data.mountPath }]
+      ? [{
+        mountPath: data.mountPath,
+        status: "N/A",
+        devices: "N/A",
+        multipaths: "N/A",
+        physicalVolume: "N/A",
+        volumeGroup: "N/A",
+        diskSize: "N/A",
+        resourceStatus: ["N/A"],
+      }]
       : [];
 
   const openGfsDiskActionModal = (action: GfsDiskAction) => {
@@ -197,8 +191,8 @@ export default function GfsDiskStatus() {
             <DescriptionListTerm>마운트 경로</DescriptionListTerm>
             <DescriptionListDescription>
               <Flex gap={{ default: "gapSm" }} flexWrap={{ default: "wrap" }}>
-                {mountDetails.length > 0 ? mountDetails.map((mountInfo) => (
-                  <FlexItem key={mountInfo.mountPath}>
+                {mountDetails.length > 0 ? mountDetails.map((mountInfo, index) => (
+                  <FlexItem key={`${mountInfo.mountPath}-${index}`}>
                     <button
                       type="button"
                       className="ct-status-card__mount ct-status-card__mount-button"

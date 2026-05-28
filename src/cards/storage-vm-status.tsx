@@ -26,9 +26,13 @@ import {
   EllipsisVIcon,
 } from "@patternfly/react-icons";
 
-import cockpit from "cockpit";
 import ConfirmActionModal from "../components/common/ConfirmActionModal";
 import VmResourceUpdateModal from "../components/common/VmResourceUpdateModal";
+import {
+  fetchStorageVmStatus,
+  STORAGE_VM_STATUS_FALLBACK,
+  type StorageVmStatusData,
+} from "../services/api/storage-vm-status";
 import "./status-card.scss";
 
 const VM_STATUS_META = {
@@ -43,26 +47,10 @@ const VM_STATUS_META = {
     icon: <ExclamationTriangleIcon />,
   },
   HEALTH_ERR: {
-    label: "Health Error",
+    label: "Health Err",
     color: "red",
     icon: <ExclamationCircleIcon />,
   },
-};
-
-const FALLBACK_DATA = {
-  vmStatus: "N/A",
-  cpu: "N/A",
-  memory: "N/A",
-  rootDiskSize: "N/A",
-  manageNicType: "N/A",
-  manageNicIp: "N/A",
-  manageNicPrefix: "N/A",
-  manageNicGw: "N/A",
-  manageNicDns: "N/A",
-  storageServerNicType: "N/A",
-  storageServerNicIp: "N/A",
-  storageReplicationNicType: "N/A",
-  storageReplicationNicIp: "N/A"
 };
 
 type StorageVmAction = "start" | "stop" | "delete" | "connect";
@@ -95,34 +83,28 @@ export default function StorageVmStatus() {
   const [confirmAction, setConfirmAction] = React.useState<StorageVmAction | null>(null);
   const [isResourceUpdateModalOpen, setIsResourceUpdateModalOpen] = React.useState(false);
 
-  const [data, setData] = React.useState({
-    vmStatus: "",
-    cpu: "",
-    memory: "",
-    rootDiskSize: "",
-    manageNicType: "",
-    manageNicIp: "",
-    manageNicPrefix: "",
-    manageNicGw: "",
-    manageNicDns: "",
-    storageServerNicType: "",
-    storageServerNicIp: "",
-    storageReplicationNicType: "",
-    storageReplicationNicIp: ""
-  });
+  const [data, setData] = React.useState<StorageVmStatusData>(STORAGE_VM_STATUS_FALLBACK);
 
   React.useEffect(() => {
-    cockpit
-      .spawn(["python3", `/root/ablecube-react/python/read_test_json.py`])
-      .then((stdout) => {
-        const parsed = JSON.parse(stdout);
-        const data = parsed["storage-vm-status"];
-        setData(data);
+    let isMounted = true;
+
+    fetchStorageVmStatus()
+      .then((nextData) => {
+        if (isMounted) {
+          setData(nextData);
+        }
       })
       .catch((err) => {
-        console.error("spawn error:", err);
-        setData(FALLBACK_DATA);
+        console.error("storage vm status API error:", err);
+
+        if (isMounted) {
+          setData(STORAGE_VM_STATUS_FALLBACK);
+        }
       });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const statusMeta = (VM_STATUS_META as any)[data.vmStatus] ?? {
@@ -131,11 +113,14 @@ export default function StorageVmStatus() {
     icon: <InfoCircleIcon />,
   };
 
-  const isClusterError = data.vmStatus === "HEALTH_ERR";
-  const footerMessage = isClusterError
-    ? "스토리지센터 가상머신이 배포되었습니다."
-    : "스토리지센터 가상머신이 배포되지 않았습니다.";
-  const footerColor = isClusterError ? "#c9190b" : "#3e8635";
+  const isVmError = data.vmStatus === "HEALTH_ERR";
+  const isVmUnknown = data.vmStatus === "N/A" || data.vmStatus === "";
+  const footerMessage = isVmUnknown
+    ? "스토리지센터 가상머신 상태 정보를 확인할 수 없습니다."
+    : isVmError
+      ? "스토리지센터 가상머신이 배포되지 않았습니다."
+      : "스토리지센터 가상머신이 배포되었습니다.";
+  const footerColor = isVmUnknown ? "#f0ab00" : isVmError ? "#c9190b" : "#3e8635";
   const isVmRunning = data.vmStatus === "running";
   const isVmStopped = data.vmStatus === "shutOff";
   const currentConfirmAction = confirmAction ? STORAGE_VM_ACTIONS[confirmAction] : null;
@@ -255,7 +240,6 @@ export default function StorageVmStatus() {
                 className="ct-health-label"
                 color={statusMeta.color}
                 icon={statusMeta.icon}
-                variant="outline"
               >
                 {statusMeta.label}
               </Label>

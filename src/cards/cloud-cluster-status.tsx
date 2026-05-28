@@ -26,15 +26,19 @@ import {
   EllipsisVIcon,
 } from "@patternfly/react-icons";
 
-import cockpit from "cockpit";
 import CloudClusterMigrationModal from "./cloud-cluster-migration-modal";
 import SshPortChangeModal from "./ssh-port-change-modal";
 import ConfirmActionModal from "../components/common/ConfirmActionModal";
+import {
+  CLOUD_CLUSTER_STATUS_FALLBACK,
+  fetchCloudClusterStatus,
+  type CloudClusterStatusData,
+} from "../services/api/cloud-cluster-status";
 import "./status-card.scss";
 
 const CLUSTER_STATUS_META = {
   HEALTH_OK: {
-    label: "Health Ok",
+    label: "Health OK",
     color: "green",
     icon: <CheckCircleIcon />,
   },
@@ -44,17 +48,10 @@ const CLUSTER_STATUS_META = {
     icon: <ExclamationTriangleIcon />,
   },
   HEALTH_ERR: {
-    label: "Health Error",
+    label: "Health Err",
     color: "red",
     icon: <ExclamationCircleIcon />,
   },
-};
-
-const FALLBACK_DATA = {
-  clusterStatus: "HEALTH_ERR",
-  nodeStatus: "N/A",
-  resourceStatus: "N/A",
-  executionNode: "N/A",
 };
 
 type CloudClusterConfirmAction =
@@ -122,25 +119,28 @@ export default function CloudClusterStatus() {
   const [isMigrationModalOpen, setIsMigrationModalOpen] = React.useState(false);
   const [isSshPortChangeModalOpen, setIsSshPortChangeModalOpen] = React.useState(false);
 
-  const [data, setData] = React.useState({
-    clusterStatus: "",
-    nodeStatus: "",
-    resourceStatus: "",
-    executionNode: "",
-  });
+  const [data, setData] = React.useState<CloudClusterStatusData>(CLOUD_CLUSTER_STATUS_FALLBACK);
 
   React.useEffect(() => {
-    cockpit
-      .spawn(["python3", `/root/ablecube-react/python/read_test_json.py`])
-      .then((stdout) => {
-        const parsed = JSON.parse(stdout);
-        const data = parsed["cloud-cluster-status"];
-        setData(data);
+    let isMounted = true;
+
+    fetchCloudClusterStatus()
+      .then((nextData) => {
+        if (isMounted) {
+          setData(nextData);
+        }
       })
       .catch((err) => {
-        console.error("spawn error:", err);
-        setData(FALLBACK_DATA);
+        console.error("cloud cluster status API error:", err);
+
+        if (isMounted) {
+          setData(CLOUD_CLUSTER_STATUS_FALLBACK);
+        }
       });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const statusMeta = (CLUSTER_STATUS_META as any)[data.clusterStatus] ?? {
@@ -150,10 +150,13 @@ export default function CloudClusterStatus() {
   };
 
   const isClusterError = data.clusterStatus === "HEALTH_ERR";
-  const footerMessage = isClusterError
-    ? "클라우드센터 클러스터가 구성되지 않았습니다."
-    : "클라우드센터 클러스터가 구성되었습니다.";
-  const footerColor = isClusterError ? "#c9190b" : "#3e8635";
+  const isClusterUnknown = data.clusterStatus === "N/A" || data.clusterStatus === "";
+  const footerMessage = isClusterUnknown
+    ? "클라우드센터 클러스터 상태 정보를 확인할 수 없습니다."
+    : isClusterError
+      ? "클라우드센터 클러스터가 구성되지 않았습니다."
+      : "클라우드센터 클러스터가 구성되었습니다.";
+  const footerColor = isClusterUnknown ? "#f0ab00" : isClusterError ? "#c9190b" : "#3e8635";
   const isClusterReady = data.clusterStatus === "HEALTH_OK";
   const isCloudVmRunning = data.resourceStatus === "실행중";
   const migrationNodes = parseMigrationNodes(data.nodeStatus, data.executionNode);
@@ -325,7 +328,6 @@ export default function CloudClusterStatus() {
                 className="ct-health-label"
                 color={statusMeta.color}
                 icon={statusMeta.icon}
-                variant="outline"
               >
                 {statusMeta.label}
               </Label>

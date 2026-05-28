@@ -26,15 +26,19 @@ import {
   EllipsisVIcon,
 } from "@patternfly/react-icons";
 
-import cockpit from "cockpit";
 import WwnListModal from "./wwn-list-modal";
 import CheckedConfirmActionModal from "../components/common/CheckedConfirmActionModal";
 import SelectActionModal from "../components/common/SelectActionModal";
+import {
+  fetchGfsResourceStatus,
+  GFS_RESOURCE_STATUS_FALLBACK,
+  type GfsResourceStatusData,
+} from "../services/api/gfs-resource-status";
 import "./status-card.scss";
 
 const STATUS_META = {
   HEALTH_OK: {
-    label: "Health Ok",
+    label: "Health OK",
     color: "green",
     icon: <CheckCircleIcon />,
   },
@@ -44,20 +48,10 @@ const STATUS_META = {
     icon: <ExclamationTriangleIcon />,
   },
   HEALTH_ERR: {
-    label: "Health Error",
+    label: "Health Err",
     color: "red",
     icon: <ExclamationCircleIcon />,
   },
-};
-
-const DEFAULT_DATA = {
-  fenceDeviceStatus: "HEALTH_WARN",
-  fenceDeviceDetail: "Stopped (10.10.13.1, 10.10.13.2, 10.10.13.3)",
-  lockDeviceStatus: "HEALTH_OK",
-  lockDeviceDetails: [
-    "glue-dlm : Started (10.10.13.1, 10.10.13.2, 10.10.13.3)",
-    "glue-lvmlockd : Started (10.10.13.1, 10.10.13.2, 10.10.13.3)",
-  ],
 };
 
 export default function GfsResourceStatus() {
@@ -67,25 +61,28 @@ export default function GfsResourceStatus() {
   const [isWwnListModalOpen, setIsWwnListModalOpen] = React.useState(false);
   const [isHostRemoveModalOpen, setIsHostRemoveModalOpen] = React.useState(false);
 
-  const [data, setData] = React.useState({
-    fenceDeviceStatus: "",
-    fenceDeviceDetail: "",
-    lockDeviceStatus: "",
-    lockDeviceDetails: [] as string[],
-  });
+  const [data, setData] = React.useState<GfsResourceStatusData>(GFS_RESOURCE_STATUS_FALLBACK);
 
   React.useEffect(() => {
-    cockpit
-      .spawn(["python3", "/root/ablecube-react/python/read_test_json.py"])
-      .then((stdout) => {
-        const parsed = JSON.parse(stdout);
-        const next = parsed["gfs-resource-status"] ?? {};
-        setData({ ...DEFAULT_DATA, ...next });
+    let isMounted = true;
+
+    fetchGfsResourceStatus()
+      .then((nextData) => {
+        if (isMounted) {
+          setData(nextData);
+        }
       })
       .catch((err) => {
-        console.error("spawn error:", err);
-        setData(DEFAULT_DATA);
+        console.error("gfs resource status API error:", err);
+
+        if (isMounted) {
+          setData(GFS_RESOURCE_STATUS_FALLBACK);
+        }
       });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const onSelect = () => setIsOpen(false);
@@ -156,7 +153,6 @@ export default function GfsResourceStatus() {
           className="ct-health-label"
           color={status.color}
           icon={status.icon}
-          variant="outline"
         >
           {status.label}
         </Label>
@@ -243,11 +239,18 @@ export default function GfsResourceStatus() {
               {renderStatusDetail(data.lockDeviceStatus, undefined, data.lockDeviceDetails)}
             </DescriptionListDescription>
           </DescriptionListGroup>
+
+          <DescriptionListGroup>
+            <DescriptionListTerm>GFS 장치 상태</DescriptionListTerm>
+            <DescriptionListDescription>
+              {renderStatusDetail(data.gfsDeviceStatus, undefined, data.gfsDeviceDetails)}
+            </DescriptionListDescription>
+          </DescriptionListGroup>
         </DescriptionList>
       </CardBody>
 
-      <CardFooter className="ct-status-card__footer" style={{ color: "#3e8635" }}>
-        GFS 리소스가 구성되었습니다.
+      <CardFooter className="ct-status-card__footer" style={{ color: data.footerColor }}>
+        {data.footerMessage}
       </CardFooter>
 
       <CheckedConfirmActionModal

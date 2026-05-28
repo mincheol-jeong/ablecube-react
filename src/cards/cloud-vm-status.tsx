@@ -26,11 +26,15 @@ import {
   EllipsisVIcon,
 } from "@patternfly/react-icons";
 
-import cockpit from "cockpit";
 import ConfirmActionModal from "../components/common/ConfirmActionModal";
 import SelectActionModal from "../components/common/SelectActionModal";
 import TextInputConfirmModal from "../components/common/TextInputConfirmModal";
 import VmResourceUpdateModal from "../components/common/VmResourceUpdateModal";
+import {
+  CLOUD_VM_STATUS_FALLBACK,
+  fetchCloudVmStatus,
+  type CloudVmStatusData,
+} from "../services/api/cloud-vm-status";
 import "./status-card.scss";
 
 const VM_STATUS_META = {
@@ -45,25 +49,10 @@ const VM_STATUS_META = {
     icon: <ExclamationTriangleIcon />,
   },
   HEALTH_ERR: {
-    label: "Health Error",
+    label: "Health Err",
     color: "red",
     icon: <ExclamationCircleIcon />,
   },
-};
-
-const FALLBACK_DATA = {
-  vmStatus: "N/A",
-  moldServiceStatus: "N/A",
-  moldDbStatus: "N/A",
-  cpu: "N/A",
-  memory: "N/A",
-  rootDiskSize: "N/A",
-  secondaryDiskSize: "N/A",
-  manageNicType: "N/A",
-  manageNicIp: "N/A",
-  manageNicPrefix: "N/A",
-  manageNicGw: "N/A",
-  manageNicDns: "N/A"
 };
 
 type CloudVmConfirmAction = "snapshotBackup";
@@ -134,33 +123,28 @@ export default function CloudVmStatus() {
   const [isResourceUpdateModalOpen, setIsResourceUpdateModalOpen] = React.useState(false);
   const [isSecondarySizeModalOpen, setIsSecondarySizeModalOpen] = React.useState(false);
 
-  const [data, setData] = React.useState({
-    vmStatus: "",
-    moldServiceStatus: "",
-    moldDbStatus: "",
-    cpu: "",
-    memory: "",
-    rootDiskSize: "",
-    secondaryDiskSize: "",
-    manageNicType: "",
-    manageNicIp: "",
-    manageNicPrefix: "",
-    manageNicGw: "",
-    manageNicDns: ""
-  });
+  const [data, setData] = React.useState<CloudVmStatusData>(CLOUD_VM_STATUS_FALLBACK);
 
   React.useEffect(() => {
-    cockpit
-      .spawn(["python3", `/root/ablecube-react/python/read_test_json.py`])
-      .then((stdout) => {
-        const parsed = JSON.parse(stdout);
-        const data = parsed["cloud-vm-status"];
-        setData(data);
+    let isMounted = true;
+
+    fetchCloudVmStatus()
+      .then((nextData) => {
+        if (isMounted) {
+          setData(nextData);
+        }
       })
       .catch((err) => {
-        console.error("spawn error:", err);
-        setData(FALLBACK_DATA);
+        console.error("cloud vm status API error:", err);
+
+        if (isMounted) {
+          setData(CLOUD_VM_STATUS_FALLBACK);
+        }
       });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const statusMeta = (VM_STATUS_META as any)[data.vmStatus] ?? {
@@ -170,10 +154,13 @@ export default function CloudVmStatus() {
   };
 
   const isVmError = data.vmStatus === "HEALTH_ERR";
-  const footerMessage = isVmError
-    ? "클라우드센터 가상머신이 배포되지 않았습니다."
-    : "클라우드센터 가상머신이 배포되었습니다.";
-  const footerColor = isVmError ? "#c9190b" : "#3e8635";
+  const isVmUnknown = data.vmStatus === "N/A" || data.vmStatus === "";
+  const footerMessage = isVmUnknown
+    ? "클라우드센터 가상머신 상태 정보를 확인할 수 없습니다."
+    : isVmError
+      ? "클라우드센터 가상머신이 배포되지 않았습니다."
+      : "클라우드센터 가상머신이 배포되었습니다.";
+  const footerColor = isVmUnknown ? "#f0ab00" : isVmError ? "#c9190b" : "#3e8635";
   const isVmRunning = data.vmStatus === "running";
   const currentConfirmAction = confirmAction ? CLOUD_VM_CONFIRM_ACTIONS[confirmAction] : null;
   const currentSelectAction = selectAction ? CLOUD_VM_SELECT_ACTIONS[selectAction] : null;
@@ -333,7 +320,6 @@ export default function CloudVmStatus() {
                 className="ct-health-label"
                 color={statusMeta.color}
                 icon={statusMeta.icon}
-                variant="outline"
               >
                 {statusMeta.label}
               </Label>
