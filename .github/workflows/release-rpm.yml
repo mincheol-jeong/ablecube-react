@@ -63,6 +63,7 @@ jobs:
               set -euo pipefail
               trap '\''chown -R "$HOST_UID:$HOST_GID" artifacts 2>/dev/null || true'\'' EXIT
               dnf install -y rpm-build make nodejs npm git tar xz findutils
+              git config --global --add safe.directory /src
               ./rpm-builder.sh --version "$VERSION" --release "$RELEASE"
             '
 
