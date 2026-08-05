@@ -1,3 +1,6 @@
+# This package ships pre-built JavaScript/CSS assets and has no debuginfo.
+%global debug_package %{nil}
+
 Name:           ablestack-cockpit-plugin
 Version:        v1.0.0
 Release:        1%{?dist}

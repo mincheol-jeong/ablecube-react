@@ -17,6 +17,7 @@ ABLESTACK Cockpit UI의 변경 이력은 이 파일에 기록합니다. RPM 버�
 - 프론트엔드 중심 프로젝트의 중복 GitHub Actions 실행을 줄이기 위해 CodeQL 분석 워크플로를 일반 push와 PR에서는 실행하지 않고, RPM 릴리스와 같은 `v*` 태그에서만 실행하도록 변경했습니다.
 - RPM 패키지 이름을 `ablestack-cockpit-plugin`으로 정하고, 태그 버전을 유지하는 `v1.0.0` 형식과 Enterprise Linux 배포 식별자(`.el9`)를 RPM 파일명에 포함하도록 변경했습니다.
 - Cockpit 플러그인 binary RPM의 대상 아키텍처를 `noarch` 대신 `x86_64`로 지정해 source RPM과 x86_64 RPM을 함께 배포하도록 변경했습니다.
+- x86_64 RPM 빌드에서 정적 JavaScript/CSS 자산에 대해 빈 debugsource 서브패키지가 생성되던 문제를 수정하기 위해 자동 debuginfo/debugsource 패키지 생성을 비활성화했습니다.
 - Rocky Linux 컨테이너에서 마운트된 Git 작업 디렉터리를 safe directory로 등록해 태그 기반 RPM 빌드가 소유자 검증 오류 없이 실행되도록 변경했습니다.
 - 배포 진행 상태와 완료 조건을 스토리지 및 클라우드센터 구성 단위로 더 자세히 표시하도록 개선했습니다.
 - 클러스터 구성, 미리보기 다운로드, 보안 패치 API 응답 처리와 상태 화면의 레이아웃을 갱신했습니다.
