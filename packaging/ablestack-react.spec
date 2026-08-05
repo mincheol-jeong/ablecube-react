@@ -4,7 +4,7 @@ Release:        1%{?dist}
 Summary:        ABLESTACK Cockpit plugin
 
 License:        LGPL-2.1-or-later
-BuildArch:      noarch
+BuildArch:      x86_64
 
 Source0:        %{name}-%{version}.tar.xz
 

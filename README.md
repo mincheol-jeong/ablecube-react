@@ -110,7 +110,7 @@ GitHub Actions 화면에서 `Release RPM`을 수동 실행할 수도 있으며, 
 Rocky Linux 9 릴리스 워크플로의 결과 파일명은 다음과 같습니다.
 
 ```
-ablestack-cockpit-plugin-v1.2.0-1.el9.noarch.rpm
+ablestack-cockpit-plugin-v1.2.0-1.el9.x86_64.rpm
 ```
 
 ### 버전 관리
