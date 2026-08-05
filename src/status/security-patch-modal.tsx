@@ -36,8 +36,11 @@ function resultMessage(result: SecurityPatchResult): string {
     const summary = typeof result.total === "number"
         ? ` 대상 ${result.total}개 중 성공 ${result.success ?? 0}개, 실패 ${result.failed ?? 0}개`
         : "";
+    const targetKinds = result.targetKinds.length > 0
+        ? ` (${result.targetKinds.join(", ")})`
+        : "";
 
-    return `${result.message}${summary}`;
+    return `${result.message}${summary}${targetKinds}`;
 }
 
 function validatePort(value: string, emptyMessage: string, invalidMessage: string): string {

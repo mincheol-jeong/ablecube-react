@@ -193,8 +193,9 @@ function readFileAsBase64(file: File): Promise<string> {
 }
 
 function flowStepsFor(productType: ProductType): FlowStep[] {
-    const isHci = productType === "ablestack-hci" || productType === "ablestack-hci-filesystem";
-    const usesGfs = productType === "ablestack-vm" || productType === "ablestack-hci-filesystem";
+    const usesStorageCenter = productType === "ablestack-hci" || productType === "ablestack-hci-filesystem";
+    const usesHciFilesystem = productType === "ablestack-hci-filesystem";
+    const usesExternalGfs = productType === "ablestack-vm";
     const usesLocal = productType === "ablestack-standalone";
 
     return [
@@ -210,22 +211,44 @@ function flowStepsFor(productType: ProductType): FlowStep[] {
             description: "제품 타입, host 목록, 관리 네트워크와 PCS 대상 정보를 검증합니다.",
             deploySteps: ["cluster_apply"],
         },
-        ...(isHci
+        ...(usesStorageCenter
             ? [
                 {
                     id: "scvm",
                     label: "스토리지 VM 구성",
                     description: "host별 SCVM 리소스, 디스크 passthrough, 네트워크 bridge 값을 검증합니다.",
-                    deploySteps: ["scvm_prepare", "scvm_bootstrap"],
+                    deploySteps: ["scvm_prepare"],
+                },
+                {
+                    id: "storage_center",
+                    label: "스토리지센터 구성",
+                    description: "SCVM bootstrap 상태와 스토리지센터 API 준비 상태를 기준으로 초기 구성을 확인합니다.",
+                    deploySteps: ["scvm_bootstrap"],
+                },
+                {
+                    id: "storage_cluster",
+                    label: "스토리지 클러스터 상세 구성",
+                    description: "SCVM host 등록, OSD 등록, rbd pool 복제/PG autoscale 구성 흐름을 확인합니다.",
+                    deploySteps: [],
                 }
             ]
             : []),
-        ...(usesGfs
+        ...(usesHciFilesystem
             ? [
                 {
-                    id: "storage",
+                    id: "hci_shared_file",
+                    label: "RBD/GFS 구성",
+                    description: "rbd image 생성, 각 host rbd map, Global File System mount 구성을 준비합니다.",
+                    deploySteps: ["rbd_prepare", "storage_prepare"],
+                }
+            ]
+            : []),
+        ...(usesExternalGfs
+            ? [
+                {
+                    id: "gfs_storage",
                     label: "GFS 스토리지 구성",
-                    description: "GFS 대상 디스크, VG/LV, mount point 값을 검증합니다.",
+                    description: "외부 스토리지 기반 GFS 대상 디스크, VG/LV, mount point 값을 검증합니다.",
                     deploySteps: ["storage_prepare"],
                 }
             ]
@@ -233,7 +256,7 @@ function flowStepsFor(productType: ProductType): FlowStep[] {
         ...(usesLocal
             ? [
                 {
-                    id: "storage",
+                    id: "local_storage",
                     label: "로컬 스토리지 구성",
                     description: "Standalone 로컬 디스크 구성을 검증합니다.",
                     deploySteps: ["local_prepare"],
@@ -244,7 +267,13 @@ function flowStepsFor(productType: ProductType): FlowStep[] {
             id: "ccvm",
             label: "클라우드 VM 구성",
             description: "CCVM 리소스, 관리 bridge, 선택적 service network 값을 검증합니다.",
-            deploySteps: ["ccvm_prepare", "ccvm_bootstrap"],
+            deploySteps: ["ccvm_prepare"],
+        },
+        {
+            id: "cloud_center",
+            label: "클라우드센터 구성",
+            description: "CCVM bootstrap 실행과 CloudStack 서비스 준비 상태를 확인합니다.",
+            deploySteps: ["ccvm_bootstrap"],
         },
         {
             id: "monitoring_connect",
@@ -253,6 +282,23 @@ function flowStepsFor(productType: ProductType): FlowStep[] {
             deploySteps: ["system_profile"],
         },
     ];
+}
+
+function deployOnlyStepsFor(productType: ProductType): string[] {
+    const commonHead = ["license_apply", "cluster_apply"];
+    const commonTail = ["ccvm_prepare", "ccvm_bootstrap", "system_profile"];
+
+    switch (productType) {
+    case "ablestack-hci":
+        return [...commonHead, "scvm_prepare", "scvm_bootstrap", ...commonTail];
+    case "ablestack-hci-filesystem":
+        return [...commonHead, "scvm_prepare", "scvm_bootstrap", "rbd_prepare", "storage_prepare", ...commonTail];
+    case "ablestack-standalone":
+        return [...commonHead, "local_prepare", ...commonTail];
+    case "ablestack-vm":
+    default:
+        return [...commonHead, "storage_prepare", ...commonTail];
+    }
 }
 
 function labelForUiStepState(state: UiStepState, phase: RunPhase) {
@@ -302,13 +348,20 @@ function isFlowStepComplete(step: FlowStep, productType: ProductType, status: De
         return isTrueStatus(raw.clusterConfigStatus);
     case "scvm":
         return isRunningStatus(raw.storageVmStatus);
-    case "storage":
-        if (productType === "ablestack-standalone") {
-            return isTrueStatus(raw.localConfigureStatus);
-        }
+    case "storage_center":
+        return isTrueStatus(raw.storageVmBootstrapStatus);
+    case "storage_cluster":
+        return raw.storageClusterStatus.toUpperCase() === "HEALTH_OK" ||
+            raw.storageClusterStatus.toUpperCase() === "HEALTH_WARN";
+    case "hci_shared_file":
+    case "gfs_storage":
         return isTrueStatus(raw.gfsConfigureStatus);
+    case "local_storage":
+        return isTrueStatus(raw.localConfigureStatus);
     case "ccvm":
         return isRunningStatus(raw.cloudVmStatus);
+    case "cloud_center":
+        return isTrueStatus(raw.cloudVmBootstrapStatus);
     case "monitoring_connect":
         return isTrueStatus(raw.monitoringStatus);
     default:
@@ -445,6 +498,9 @@ export default function AllInOneControlModal({
     const [gfsDiskLoadError, setGfsDiskLoadError] = React.useState("");
     const [volumeGroupsText, setVolumeGroupsText] = React.useState("vg_glue,lv_glue");
     const [gfsMountPoint, setGfsMountPoint] = React.useState("/mnt/glue-gfs");
+    const [rbdPoolName, setRbdPoolName] = React.useState("rbd");
+    const [rbdImagePrefix, setRbdImagePrefix] = React.useState("gfs");
+    const [rbdSizeGiB, setRbdSizeGiB] = React.useState("5000");
     const [localDisksText, setLocalDisksText] = React.useState("/dev/sdb");
     const [ccvmCpu, setCcvmCpu] = React.useState("8");
     const [ccvmMemory, setCcvmMemory] = React.useState("32");
@@ -467,7 +523,9 @@ export default function AllInOneControlModal({
     const wasOpenRef = React.useRef(false);
 
     const isHci = productType === "ablestack-hci" || productType === "ablestack-hci-filesystem";
-    const usesGfs = productType === "ablestack-vm" || productType === "ablestack-hci-filesystem";
+    const usesHciFilesystem = productType === "ablestack-hci-filesystem";
+    const usesExternalGfs = productType === "ablestack-vm";
+    const usesGfsMount = usesExternalGfs || usesHciFilesystem;
     const usesLocal = productType === "ablestack-standalone";
     const cloudCenterWaitText = productType === "ablestack-vm"
         ? "CloudStack 서비스 준비까지 보통 5~10분 정도 걸립니다."
@@ -748,6 +806,7 @@ export default function AllInOneControlModal({
         ));
         const payload: Record<string, unknown> = {
             mode: "all",
+            only: deployOnlyStepsFor(productType),
             update_system_profile: updateSystemProfile,
             cluster: {
                 action: "insert",
@@ -760,7 +819,7 @@ export default function AllInOneControlModal({
                     dns: mngtDns.trim(),
                 },
                 external_timeserver: externalTimeServer.trim(),
-                iscsi_storage: String(iscsiStorage),
+                storage_network: String(iscsiStorage),
                 pcs_cluster_list: splitList(pcsClusterListText),
                 hosts,
             },
@@ -769,7 +828,7 @@ export default function AllInOneControlModal({
                 memory: Number(ccvmMemory) || 32,
                 management_network_bridge: ccvmMgmtBridge.trim(),
                 ...(ccvmServiceBridge.trim() ? { service_network_bridge: ccvmServiceBridge.trim() } : {}),
-                ...(usesGfs ? { gfs_mount_point: gfsMountPoint.trim() } : {}),
+                ...(usesGfsMount ? { gfs_mount_point: gfsMountPoint.trim() } : {}),
             },
             ccvm_lifecycle: { action: "setup" },
         };
@@ -783,12 +842,27 @@ export default function AllInOneControlModal({
             payload.scvm_by_host = parseSCVMByHost();
         }
 
-        if (usesGfs) {
+        if (usesExternalGfs) {
             payload.gfs = {
                 action: "init-pcs-cluster",
                 disks: splitList(gfsDisksText),
                 mount_point: gfsMountPoint.trim(),
                 volume_groups: parseVolumeGroups(volumeGroupsText),
+            };
+        }
+
+        if (usesHciFilesystem) {
+            payload.gfs = {
+                action: "init-pcs-cluster",
+                mount_point: gfsMountPoint.trim(),
+                volume_groups: parseVolumeGroups(volumeGroupsText),
+            };
+            payload.rbd = {
+                action: "create",
+                pool_name: rbdPoolName.trim() || "rbd",
+                image_prefix: rbdImagePrefix.trim() || "gfs",
+                size: Number(rbdSizeGiB) || 0,
+                mount_point: gfsMountPoint.trim(),
             };
         }
 
@@ -837,17 +911,28 @@ export default function AllInOneControlModal({
             }
         }
 
-        if (stepId === "storage") {
-            if (usesGfs && gfsDiskLoadState === "error") return `GFS 디스크 정보를 확인해주세요. ${gfsDiskLoadError}`;
-            if (usesGfs && splitList(gfsDisksText).length === 0) return "GFS 구성 대상 디스크를 입력해주세요.";
-            if (usesGfs && parseVolumeGroups(volumeGroupsText).length === 0) return "GFS VG/LV 쌍을 입력해주세요.";
+        if (stepId === "gfs_storage") {
+            if (gfsDiskLoadState === "error") return `GFS 디스크 정보를 확인해주세요. ${gfsDiskLoadError}`;
+            if (splitList(gfsDisksText).length === 0) return "GFS 구성 대상 디스크를 입력해주세요.";
+            if (parseVolumeGroups(volumeGroupsText).length === 0) return "GFS VG/LV 쌍을 입력해주세요.";
+        }
+
+        if (stepId === "hci_shared_file") {
+            if (!rbdPoolName.trim()) return "RBD pool 이름을 입력해주세요.";
+            if (!rbdImagePrefix.trim()) return "RBD image prefix를 입력해주세요.";
+            if (!Number.isFinite(Number(rbdSizeGiB)) || Number(rbdSizeGiB) <= 0) return "RBD 총 용량 GiB를 입력해주세요.";
+            if (!gfsMountPoint.trim()) return "GFS mount point를 입력해주세요.";
+            if (parseVolumeGroups(volumeGroupsText).length === 0) return "GFS VG/LV 쌍을 입력해주세요.";
+        }
+
+        if (stepId === "local_storage") {
             if (usesLocal && splitList(localDisksText).length === 0) return "로컬 스토리지 대상 디스크를 입력해주세요.";
         }
 
         if (stepId === "ccvm") {
             if (nicLoadState === "error") return `NIC 정보를 확인해주세요. ${nicLoadError}`;
             if (!ccvmMgmtBridge.trim()) return "CCVM 관리 Bridge를 입력해주세요.";
-            if (usesGfs && !gfsMountPoint.trim()) return "GFS mount point를 입력해주세요.";
+            if (usesGfsMount && !gfsMountPoint.trim()) return "GFS mount point를 입력해주세요.";
         }
 
         return "";
@@ -1330,6 +1415,64 @@ export default function AllInOneControlModal({
         </Form>
     );
 
+    const renderStorageCenterStep = () => (
+        <div className="ct-all-in-one-static-step">
+            <Alert
+              variant="info"
+              isInline
+              title="SCVM bootstrap으로 스토리지센터 초기 구성을 진행합니다."
+            >
+                스토리지 VM이 Running 상태가 된 뒤, 각 SCVM의 bootstrap API를 실행해 Glue 클러스터 host 등록과
+                스토리지센터 API 준비 상태를 확인합니다.
+            </Alert>
+            <div className="ct-all-in-one-static-step__grid">
+                <div>
+                    <span>적용 대상 제품</span>
+                    <strong>ABLESTACK-HCI / HCI Filesystem</strong>
+                </div>
+                <div>
+                    <span>실행 Job 단계</span>
+                    <strong>scvm_bootstrap</strong>
+                </div>
+                <div>
+                    <span>완료 판단</span>
+                    <strong>scvm_bootstrap_status = true</strong>
+                </div>
+            </div>
+        </div>
+    );
+
+    const renderStorageClusterStep = () => (
+        <div className="ct-all-in-one-static-step">
+            <Alert
+              variant="info"
+              isInline
+              title="스토리지 클러스터 상세 구성을 확인합니다."
+            >
+                SCVM이 Glue host로 정확히 등록되었는지 확인한 뒤, passthrough 디스크를 OSD로 등록하고
+                rbd pool을 replicated 2와 PG autoscale 기준으로 구성하는 단계입니다.
+            </Alert>
+            <div className="ct-all-in-one-plan-list">
+                <div>
+                    <strong>1. SCVM host 확인</strong>
+                    <span>cluster.json hosts의 SCVM 이름과 Glue host 목록을 비교합니다.</span>
+                </div>
+                <div>
+                    <strong>2. OSD 등록</strong>
+                    <span>LUN/Disk passthrough 장치를 초기화 후 OSD로 등록합니다.</span>
+                </div>
+                <div>
+                    <strong>3. rbd pool 구성</strong>
+                    <span>rbd pool, 2벌 복제, autoscale on, application rbd를 적용합니다.</span>
+                </div>
+                <div>
+                    <strong>4. 상태 검증</strong>
+                    <span>Glue Cluster 상태가 Health OK 또는 Warn인지 확인합니다.</span>
+                </div>
+            </div>
+        </div>
+    );
+
     const selectedGfsDisks = splitList(gfsDisksText);
 
     const toggleGfsDisk = (diskValue: string, checked: boolean) => {
@@ -1340,32 +1483,8 @@ export default function AllInOneControlModal({
         setGfsDisksText(next.join("\n"));
     };
 
-    const renderStorageStep = () => {
-        if (usesLocal) {
-            return (
-                <Form className="ct-all-in-one-form" isHorizontal>
-                    <FormGroup
-                      label="로컬 디스크" isRequired
-                      fieldId="all-in-one-local-disks"
-                    >
-                        <TextArea
-                          id="all-in-one-local-disks"
-                          value={localDisksText}
-                          rows={5}
-                          resizeOrientation="vertical"
-                          onChange={(_event, value) => setLocalDisksText(value)}
-                        />
-                    </FormGroup>
-                    <Alert
-                      variant="info" isInline
-                      title="Standalone은 로컬 디스크 준비 후 CCVM을 구성합니다."
-                    />
-                </Form>
-            );
-        }
-
-        return (
-            <Form className="ct-all-in-one-form" isHorizontal>
+    const renderGfsStorageStep = () => (
+        <Form className="ct-all-in-one-form" isHorizontal>
                 <FormGroup
                   label="GFS 디스크" isRequired
                   fieldId="all-in-one-gfs-disks"
@@ -1429,9 +1548,96 @@ export default function AllInOneControlModal({
                       onChange={(_event, value) => setGfsMountPoint(value)}
                     />
                 </FormGroup>
-            </Form>
-        );
-    };
+        </Form>
+    );
+
+    const renderHciSharedFileStep = () => (
+        <Form className="ct-all-in-one-form" isHorizontal>
+            <Alert
+              variant="info"
+              isInline
+              title="HCI Filesystem은 RBD image를 생성한 뒤 각 host에 rbd map을 반영합니다."
+            >
+                SCVM이 아닌 물리 host를 대상으로 /etc/ceph/rbdmap을 적용하고, map된 RBD 장치로 Global File System을 구성합니다.
+            </Alert>
+            <FormGroup
+              label="RBD pool" isRequired
+              fieldId="all-in-one-rbd-pool"
+            >
+                <TextInput
+                  id="all-in-one-rbd-pool"
+                  value={rbdPoolName}
+                  onChange={(_event, value) => setRbdPoolName(value)}
+                />
+            </FormGroup>
+            <FormGroup
+              label="RBD image prefix" isRequired
+              fieldId="all-in-one-rbd-prefix"
+            >
+                <TextInput
+                  id="all-in-one-rbd-prefix"
+                  value={rbdImagePrefix}
+                  onChange={(_event, value) => setRbdImagePrefix(value)}
+                />
+            </FormGroup>
+            <FormGroup
+              label="총 용량 GiB" isRequired
+              fieldId="all-in-one-rbd-size"
+            >
+                <TextInput
+                  id="all-in-one-rbd-size"
+                  value={rbdSizeGiB}
+                  onChange={(_event, value) => setRbdSizeGiB(value)}
+                />
+            </FormGroup>
+            <FormGroup
+              label="VG/LV" isRequired
+              fieldId="all-in-one-hci-fs-volume-groups"
+            >
+                <TextArea
+                  id="all-in-one-hci-fs-volume-groups"
+                  value={volumeGroupsText}
+                  rows={4}
+                  resizeOrientation="vertical"
+                  onChange={(_event, value) => setVolumeGroupsText(value)}
+                />
+                <Content component="p" className="ct-all-in-one-help">
+                    한 줄에 `vg_glue,lv_glue` 형식으로 입력합니다.
+                </Content>
+            </FormGroup>
+            <FormGroup
+              label="Mount point" isRequired
+              fieldId="all-in-one-hci-fs-mount"
+            >
+                <TextInput
+                  id="all-in-one-hci-fs-mount"
+                  value={gfsMountPoint}
+                  onChange={(_event, value) => setGfsMountPoint(value)}
+                />
+            </FormGroup>
+        </Form>
+    );
+
+    const renderLocalStorageStep = () => (
+        <Form className="ct-all-in-one-form" isHorizontal>
+            <FormGroup
+              label="로컬 디스크" isRequired
+              fieldId="all-in-one-local-disks"
+            >
+                <TextArea
+                  id="all-in-one-local-disks"
+                  value={localDisksText}
+                  rows={5}
+                  resizeOrientation="vertical"
+                  onChange={(_event, value) => setLocalDisksText(value)}
+                />
+            </FormGroup>
+            <Alert
+              variant="info" isInline
+              title="Standalone은 로컬 디스크 준비 후 CCVM을 구성합니다."
+            />
+        </Form>
+    );
 
     const renderCCVMStep = () => (
         <Form className="ct-all-in-one-form" isHorizontal>
@@ -1495,7 +1701,7 @@ export default function AllInOneControlModal({
                     ))}
                 </FormSelect>
             </FormGroup>
-            {usesGfs && (
+            {usesGfsMount && (
                 <FormGroup
                   label="GFS mount point" isRequired
                   fieldId="all-in-one-ccvm-gfs-mount"
@@ -1593,8 +1799,16 @@ export default function AllInOneControlModal({
             return renderClusterStep();
         case "scvm":
             return renderSCVMStep();
-        case "storage":
-            return renderStorageStep();
+        case "storage_center":
+            return renderStorageCenterStep();
+        case "storage_cluster":
+            return renderStorageClusterStep();
+        case "hci_shared_file":
+            return renderHciSharedFileStep();
+        case "gfs_storage":
+            return renderGfsStorageStep();
+        case "local_storage":
+            return renderLocalStorageStep();
         case "ccvm":
             return renderCCVMStep();
         default:

@@ -1,82 +1,156 @@
 #!/usr/bin/env bash
+# Build a noarch RPM containing the pre-built Cockpit plugin assets.
 set -euo pipefail
 
-# -----------------------------
-# Config
-# -----------------------------
-NAME=ablestack-react
-SPEC_NAME=ablestack-react.spec
+readonly PACKAGE_NAME="ablestack-cockpit-plugin"
+readonly SPEC_FILE="packaging/ablestack-react.spec"
+readonly PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly VERSION_FILE="$PROJECT_ROOT/VERSION.md"
+readonly CHANGELOG_FILE="$PROJECT_ROOT/CHANGELOG.md"
 
-# 명시적 버전 (제품/배포용 권장)
-VERSION=1.0.0
+cd -- "$PROJECT_ROOT"
 
-# 현재 스크립트 위치를 기준으로 rpmbuild 생성
-TOPDIR="$(pwd)"
-RPMTOP="$TOPDIR/rpmbuild"
-SOURCES="$RPMTOP/SOURCES"
-SPECS="$RPMTOP/SPECS"
+usage() {
+    cat <<'EOF'
+Usage: ./rpm-builder.sh [--version VERSION] [--release RELEASE] [--dist DIST] [--output DIRECTORY]
 
-echo "==> Package : $NAME"
-echo "==> Version : $VERSION"
-echo "==> RPMTOP  : $RPMTOP"
-echo
+Builds a source RPM and a noarch RPM. The plugin is built locally first, so the
+RPM build itself does not need npm or network access.
 
-# -----------------------------
-# 0. rpmbuild 초기화
-# -----------------------------
-if [ -d "$RPMTOP" ]; then
-    echo "==> Cleaning old rpmbuild directory"
-    rm -rf "$RPMTOP"
+Options:
+  --version VERSION    RPM version (default: VERSION.md)
+  --release RELEASE    RPM release (default: 1)
+  --dist DIST          RPM distribution suffix, for example .el9 (default: system setting)
+  --output DIRECTORY   Directory for the finished RPMs (default: ./artifacts/rpm)
+  -h, --help           Show this help
+EOF
+}
+
+version="${VERSION:-}"
+release="${RELEASE:-1}"
+dist_tag="${RPM_DIST:-}"
+output_dir="${RPM_OUTPUT_DIR:-$PROJECT_ROOT/artifacts/rpm}"
+
+while (($#)); do
+    case "$1" in
+        --version)
+            version="${2:?--version requires a value}"
+            shift 2
+            ;;
+        --release)
+            release="${2:?--release requires a value}"
+            shift 2
+            ;;
+        --dist)
+            dist_tag="${2:?--dist requires a value}"
+            shift 2
+            ;;
+        --output)
+            output_dir="${2:?--output requires a value}"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+if [[ -z "$version" ]]; then
+    if [[ ! -f "$VERSION_FILE" ]]; then
+        echo "Version file not found: $VERSION_FILE" >&2
+        exit 1
+    fi
+    IFS= read -r version < "$VERSION_FILE" || true
+    version="${version//$'\r'/}"
+    version="${version//[[:space:]]/}"
 fi
 
-mkdir -p "$RPMTOP"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+if [[ -z "$version" || ! "$version" =~ ^[A-Za-z0-9._+~^]+$ ]]; then
+    echo "Invalid RPM version: ${version:-<empty>}" >&2
+    echo "Use --version with letters, digits, '.', '_', '+', '~', or '^'." >&2
+    exit 2
+fi
 
-# -----------------------------
-# 1. clean workspace
-# -----------------------------
-echo "==> clean"
-make clean || true
+if [[ ! "$release" =~ ^[A-Za-z0-9._+~^]+$ ]]; then
+    echo "Invalid RPM release: $release" >&2
+    exit 2
+fi
 
-# -----------------------------
-# 2. build dist via Makefile
-# -----------------------------
-echo "==> build dist"
-make
+if [[ -n "$dist_tag" && ! "$dist_tag" =~ ^\.[A-Za-z0-9._+~^]+$ ]]; then
+    echo "Invalid RPM distribution suffix: $dist_tag (example: .el9)" >&2
+    exit 2
+fi
 
-test -d dist || { echo "dist not generated"; exit 1; }
+for command in make npm node rpmbuild tar; do
+    command -v "$command" >/dev/null || {
+        echo "Required command not found: $command" >&2
+        exit 1
+    }
+done
 
-# -----------------------------
-# 3. Source0: source tarball (prefix 있음)
-# -----------------------------
-echo "==> create source tarball"
-tar -cJf "$SOURCES/$NAME-$VERSION.tar.xz" \
-  --exclude node_modules \
-  --exclude dist \
-  --exclude rpmbuild \
-  --transform "s,^,$NAME-$VERSION/," \
-  .
+if [[ ! -f "$PROJECT_ROOT/$SPEC_FILE" ]]; then
+    echo "Spec file not found: $SPEC_FILE" >&2
+    exit 1
+fi
 
-# -----------------------------
-# 4. Source1: dist tarball (prefix 없음)
-# -----------------------------
-echo "==> create dist tarball"
-tar -cJf "$SOURCES/$NAME-dist-$VERSION.tar.xz" dist
+if [[ ! -f "$CHANGELOG_FILE" ]]; then
+    echo "Changelog file not found: $CHANGELOG_FILE" >&2
+    exit 1
+fi
 
-# -----------------------------
-# 5. install spec
-# -----------------------------
-echo "==> install spec"
-sed "s/^Version:.*/Version:        $VERSION/" \
-  packaging/$SPEC_NAME > "$SPECS/$SPEC_NAME"
+if ! grep -Fq "## [${version}]" "$CHANGELOG_FILE"; then
+    echo "CHANGELOG.md must contain a release section for version ${version}" >&2
+    exit 1
+fi
 
-# -----------------------------
-# 6. rpmbuild
-# -----------------------------
-echo "==> rpmbuild"
-rpmbuild -ba "$SPECS/$SPEC_NAME" \
-    --define "_topdir $RPMTOP"
+source_dir="${PACKAGE_NAME}-${version}"
+topdir="$(mktemp -d "${TMPDIR:-/tmp}/${PACKAGE_NAME}-rpmbuild.XXXXXX")"
+trap 'rm -rf -- "$topdir"' EXIT
+
+mkdir -p "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+mkdir -p "$output_dir"
+
+echo "==> Building ${PACKAGE_NAME} ${version}-${release}${dist_tag}"
+echo "==> Creating production assets"
+# -B guarantees that an earlier development build is not accidentally packaged.
+# build.js replaces dist/ itself, so this preserves the developer's node_modules.
+make -B -C "$PROJECT_ROOT" NODE_ENV=production
+test -d "$PROJECT_ROOT/dist" || { echo "dist/ was not generated" >&2; exit 1; }
+
+echo "==> Creating source archive"
+tar -C "$PROJECT_ROOT" --xz -cf "$topdir/SOURCES/${source_dir}.tar.xz" \
+    --exclude=.git \
+    --exclude=artifacts \
+    --exclude=package-lock.json \
+    --exclude=metafile.json \
+    --exclude=node_modules \
+    --exclude=rpmbuild \
+    --exclude=runtime-npm-modules.txt \
+    --exclude=pkg \
+    --transform "s,^,${source_dir}/," \
+    .
+
+sed \
+    -e "s/^Version:[[:space:]].*/Version:        ${version}/" \
+    -e "s/^Release:[[:space:]].*/Release:        ${release}%{?dist}/" \
+    "$PROJECT_ROOT/$SPEC_FILE" > "$topdir/SPECS/${PACKAGE_NAME}.spec"
+
+echo "==> Building RPMs"
+rpmbuild_args=(--define "_topdir $topdir")
+if [[ -n "$dist_tag" ]]; then
+    rpmbuild_args+=(--define "dist $dist_tag")
+fi
+rpmbuild -ba "$topdir/SPECS/${PACKAGE_NAME}.spec" "${rpmbuild_args[@]}"
+
+find "$topdir/RPMS" "$topdir/SRPMS" -type f \( -name '*.rpm' -o -name '*.src.rpm' \) \
+    -exec cp -f {} "$output_dir"/ \;
 
 echo
-echo "DONE"
-echo "Generated RPMs:"
-find "$RPMTOP/RPMS" -name "*.rpm" -printf "  %p\n"
+echo "Finished RPMs:"
+find "$output_dir" -maxdepth 1 -type f \( -name '*.rpm' -o -name '*.src.rpm' \) -print | sort

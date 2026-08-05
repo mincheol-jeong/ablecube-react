@@ -20,7 +20,7 @@ import {
   DescriptionListDescription,
   Spinner,
 } from "@patternfly/react-core";
-import { CheckCircleIcon, EraserIcon, InfoCircleIcon, UploadIcon } from "@patternfly/react-icons";
+import { CheckCircleIcon, InfoCircleIcon } from "@patternfly/react-icons";
 import cockpit from "cockpit";
 
 import ValidationErrorModal from "../components/common/ValidationErrorModal";
@@ -369,7 +369,10 @@ function parseClusterConfigFile(text: string) {
     mgmtGateway: outputText(mngtNic.gw) || outputText(ccvm.gw),
     mgmtDns: outputText(mngtNic.dns) || outputText(ccvm.dns),
     externalTimeServer: outputText(clusterConfig.external_timeserver) || outputText(clusterConfig.extenal_timeserver),
-    isIscsiExclusive: isTrueLike(clusterConfig.iscsi_storage) || isTrueLike(clusterConfig.iscsiStorageExclusive),
+    isIscsiExclusive: isTrueLike(clusterConfig.storage_network) ||
+      isTrueLike(clusterConfig.storageNetwork) ||
+      isTrueLike(clusterConfig.iscsi_storage) ||
+      isTrueLike(clusterConfig.iscsiStorageExclusive),
     timeServer1: explicitTimeServers[0] || hostTimeServers[0] || "",
     timeServer2: explicitTimeServers[1] || hostTimeServers[1] || "",
     internalToken: outputText(rootSecurity.internal_token) || outputText(clusterSecurity.internal_token),
@@ -849,9 +852,6 @@ export default function ClusterConfigPrepareWizardModal({
           onClick={openFileDialog}
           aria-label={`${placeholder} 파일 첨부`}
         >
-          <span className="ct-file-attach__icon">
-            <UploadIcon aria-hidden="true" />
-          </span>
           <span className="ct-file-attach__copy">
             <strong>{filename || placeholder}</strong>
             <small>
@@ -866,7 +866,6 @@ export default function ClusterConfigPrepareWizardModal({
           type="button"
           variant="secondary"
           className="ct-file-attach__clear"
-          icon={<EraserIcon aria-hidden="true" />}
           isDisabled={isDisabled || !hasFile}
           onClick={onClear}
         >
@@ -1145,7 +1144,7 @@ export default function ClusterConfigPrepareWizardModal({
           },
         } : {}),
         external_timeserver: externalTimeServer.trim() || timeServer1.trim(),
-        iscsi_storage: String(clusterType === "ablestack-vm" && isIscsiExclusive),
+        storage_network: String(clusterType === "ablestack-vm" && isIscsiExclusive),
         ...(pcsClusterList.length > 0 ? { pcs_cluster_list: pcsClusterList } : {}),
         hosts: hostsPayload,
         ...(internalToken ? {

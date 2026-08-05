@@ -79,6 +79,7 @@ function previewDeployStatus() {
         "configure_local_storage",
         "configure_cloud_vm",
         "configure_cloud_cluster",
+        "configure_cloud_resource",
         "configure_monitoring",
         "open_cloud_center",
         "open_monitoring_center",
@@ -398,7 +399,7 @@ function previewClusterConfig() {
       },
     hosts,
     external_timeserver: "time.google.com",
-    iscsi_storage: isVm ? "true" : "false",
+    storage_network: isVm ? "true" : "false",
   };
 }
 
@@ -526,6 +527,26 @@ export function getPreviewCubeApiResponse<T>(
 
   const normalizedPath = normalizePath(path);
 
+  if (normalizedPath.startsWith("/api/v1/mold/jobs/")) {
+    return {
+      code: 200,
+      job: {
+        job_id: "preview-mold-job",
+        status: "succeeded",
+        current_step: "",
+        message: "프리뷰 모드 클라우드 리소스 구성이 완료되었습니다.",
+        steps: [
+          { name: "create_zone", command: "createZone", status: "succeeded", message: "ok" },
+          { name: "create_pod", command: "createPod", status: "succeeded", message: "ok" },
+          { name: "add_host", command: "addHost", status: "succeeded", message: "ok" },
+          { name: "add_primary_storage", command: "createStoragePool", status: "succeeded", message: "ok" },
+          { name: "add_secondary_storage", command: "addImageStore", status: "succeeded", message: "ok" },
+        ],
+      },
+      message: "ok",
+    } as T;
+  }
+
   switch (normalizedPath) {
   case "/api/v1/cube/deploy/status":
     return previewDeployStatus() as T;
@@ -583,6 +604,29 @@ export function getPreviewCubeApiResponse<T>(
         },
       ],
     } as T;
+  case "/api/v1/cube/gfs/manage": {
+    const body = typeof options.body === "object" && options.body
+      ? options.body as { action?: unknown }
+      : {};
+    const action = String(body.action ?? "init-pcs-cluster");
+
+    return {
+      code: 200,
+      action,
+      target: action === "configure-stonith" ? "local" : "fanout",
+      message: "preview ok",
+      val: action === "configure-stonith"
+        ? { configured: true, stonithEnabled: true }
+        : "ok",
+      results: action === "configure-stonith"
+        ? []
+        : [
+            { hostname: "ablecube1", target: "10.10.12.1", code: 200, message: "완료" },
+            { hostname: "ablecube2", target: "10.10.12.2", code: 200, message: "완료" },
+            { hostname: "ablecube3", target: "10.10.12.3", code: 200, message: "완료" },
+          ],
+    } as T;
+  }
   case "/api/v1/cube/hba/manage":
     return {
       code: 200,
@@ -606,6 +650,58 @@ export function getPreviewCubeApiResponse<T>(
           dryRun: true,
         },
       },
+    } as T;
+  case "/api/v1/cube/security/evidence":
+    return {
+      code: 200,
+      message: "preview ok",
+      val: {
+        path: "/var/lib/ablestack/security-evidence/security-evidence.zip",
+        filename: "security-evidence-preview.zip",
+        size: 5242880,
+        generated_at: new Date().toISOString(),
+        hosts: 3,
+        collected_hosts: ["ablecube1", "ablecube2", "ablecube3"],
+        requested_hosts: 3,
+        requested_targets: ["all"],
+        cluster_type: previewProductType(),
+        target_groups: ["ablecube", "ccvm"],
+        items: 67,
+        slides: 67,
+        collector_status: 0,
+        download_available: true,
+      },
+    } as T;
+  case "/api/v1/mold/bootstrap/plan":
+    return {
+      code: 200,
+      val: {
+        ready: true,
+        missing_inputs: [],
+        notes: ["preview"],
+        steps: [
+          { name: "wait_mold_api_ready", command: "listCapabilities", verify_command: "listCapabilities" },
+          { name: "login_admin", command: "login", verify_command: "listCapabilities" },
+          { name: "create_zone", command: "createZone", verify_command: "listZones" },
+          { name: "create_pod", command: "createPod", verify_command: "listPods" },
+          { name: "add_host", command: "addHost", verify_command: "listHosts" },
+          { name: "add_primary_storage", command: "createStoragePool", verify_command: "listStoragePools" },
+          { name: "add_secondary_storage", command: "addImageStore", verify_command: "listImageStores" },
+          { name: "enable_zone", command: "updateZone", verify_command: "listZones" },
+          { name: "final_health_check", verify_command: "listZones,listHosts,listStoragePools" },
+        ],
+      },
+    } as T;
+  case "/api/v1/mold/bootstrap":
+    return {
+      code: 202,
+      job_id: "preview-mold-job",
+      status: "queued",
+      message: "preview mold bootstrap job started",
+      steps: [
+        { name: "create_zone", command: "createZone", status: "pending" },
+        { name: "add_host", command: "addHost", status: "pending" },
+      ],
     } as T;
   case "/api/v1/cube/version/update": {
     const body = typeof options.body === "object" && options.body

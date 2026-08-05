@@ -22,6 +22,10 @@ interface SecurityPatchResponse {
       failed?: number;
       dryRun?: boolean;
     };
+    targets?: Array<{
+      targetKind?: string;
+      scriptPath?: string;
+    }>;
   } | string;
 }
 
@@ -31,6 +35,8 @@ export interface SecurityPatchResult {
   success?: number;
   failed?: number;
   dryRun?: boolean;
+  targetKinds: string[];
+  scriptPaths: string[];
 }
 
 function isSuccessCode(code: number | string | undefined): boolean {
@@ -55,6 +61,9 @@ function responseMessage(response: SecurityPatchResponse, fallback: string): str
 
 function mapResult(response: SecurityPatchResponse): SecurityPatchResult {
     const summary = typeof response.val === "object" ? response.val?.summary : undefined;
+    const targets = typeof response.val === "object" && Array.isArray(response.val?.targets)
+        ? response.val.targets
+        : [];
 
     return {
         message: responseMessage(response, "취약점 조치 요청이 완료되었습니다."),
@@ -62,6 +71,12 @@ function mapResult(response: SecurityPatchResponse): SecurityPatchResult {
         success: summary?.success,
         failed: summary?.failed,
         dryRun: summary?.dryRun,
+        targetKinds: Array.from(new Set(targets
+                .map((target) => target.targetKind?.trim())
+                .filter((value): value is string => Boolean(value)))),
+        scriptPaths: Array.from(new Set(targets
+                .map((target) => target.scriptPath?.trim())
+                .filter((value): value is string => Boolean(value)))),
     };
 }
 

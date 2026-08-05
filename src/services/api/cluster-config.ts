@@ -89,7 +89,12 @@ export async function fetchClusterConfigProfile(): Promise<ClusterConfigProfile>
     managementCidr: readString(mngtNic, ["cidr"]),
     managementGateway: readString(mngtNic, ["gw", "gateway"]),
     managementDns: readString(mngtNic, ["dns"]),
-    iscsiStorage: readBoolean(config, ["iscsi_storage", "iscsiStorage"]),
+    iscsiStorage: readBoolean(config, [
+        "storage_network",
+        "storageNetwork",
+        "iscsi_storage",
+        "iscsiStorage",
+    ]),
     hosts: rawHosts.map(normalizeHost),
   };
 }

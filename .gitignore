@@ -15,6 +15,7 @@
 /Test*.log.gz
 /Test*.png
 /*.whl
+/artifacts/
 /bots
 /cockpit-*.tar.xz
 /dist/

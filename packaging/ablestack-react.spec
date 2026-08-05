@@ -1,35 +1,36 @@
-Name:           ablestack-react
-Version:        1.0.0
+Name:           ablestack-cockpit-plugin
+Version:        v1.0.0
 Release:        1%{?dist}
-Summary:        Ablestack Cockpit React plugin
+Summary:        ABLESTACK Cockpit plugin
 
 License:        LGPL-2.1-or-later
 BuildArch:      noarch
 
 Source0:        %{name}-%{version}.tar.xz
-Source1:        %{name}-dist-%{version}.tar.xz
 
 Requires:       cockpit-bridge >= 318
 
 %description
-Ablestack Cockpit plugin built with React.
-This package contains prebuilt static assets.
+ABLESTACK management functionality for the Cockpit web console.
 
 %prep
-%setup -q
-tar -xf %{SOURCE1}
+%autosetup -n %{name}-%{version}
 
 %build
-# nothing to build (dist is prebuilt)
+# The RPM is intentionally built from assets pre-built by rpm-builder.sh.
 
 %install
-mkdir -p %{buildroot}%{_datadir}/cockpit/%{name}
-cp -r dist/* %{buildroot}%{_datadir}/cockpit/%{name}
+install -d %{buildroot}%{_datadir}/cockpit/ablestack
+cp -a dist/. %{buildroot}%{_datadir}/cockpit/ablestack/
+install -Dpm 0644 io.ablecloud.ablestack.metainfo.xml \
+    %{buildroot}%{_datadir}/metainfo/io.ablecloud.ablestack.metainfo.xml
 
 %files
 %license LICENSE
-%{_datadir}/cockpit/%{name}
+%doc README.md CHANGELOG.md VERSION.md
+%{_datadir}/cockpit/ablestack
+%{_datadir}/metainfo/io.ablecloud.ablestack.metainfo.xml
 
 %changelog
-* Tue Jan 14 2026 Ablecloud <support@ablecloud.io> - 1.0.0-1
+* Wed Aug 05 2026 Ablecloud <support@ablecloud.io> - v1.0.0-1
 - Initial package

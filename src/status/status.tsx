@@ -26,9 +26,11 @@ import StorageVmDeployWizardModal from "../wizard/storage-vm-deploy-wizard.tsx";
 
 import AblestackUpdateModal from "./ablestack-update-modal.tsx";
 import AllInOneControlModal from "./all-in-one-control-modal.tsx";
+import CloudResourceConfigureModal from "./cloud-resource-configure-modal.tsx";
 import ConfigFileDownloadModal from "./config-file-download-modal.tsx";
 import DeploymentOverview from "./deployment-overview.tsx";
 import LicenseManagementModal from "./license-management-modal.tsx";
+import SecurityEvidenceModal from "./security-evidence-modal.tsx";
 import SecurityPatchModal from "./security-patch-modal.tsx";
 
 import "./status.scss";
@@ -44,6 +46,8 @@ export default function StatusPage() {
     const [isAllInOneControlOpen, setIsAllInOneControlOpen] = React.useState(false);
     const [isSecurityPatchOpen, setIsSecurityPatchOpen] = React.useState(false);
     const [isAblestackUpdateOpen, setIsAblestackUpdateOpen] = React.useState(false);
+    const [isSecurityEvidenceOpen, setIsSecurityEvidenceOpen] = React.useState(false);
+    const [isCloudResourceOpen, setIsCloudResourceOpen] = React.useState(false);
     const [deployStatus, setDeployStatus] = React.useState<DeployStatusData>(DEPLOY_STATUS_FALLBACK);
     const [actionNotice, setActionNotice] = React.useState("");
     const [statusRefreshKey, setStatusRefreshKey] = React.useState(0);
@@ -106,9 +110,11 @@ export default function StatusPage() {
             setIsCloudVmWizardOpen(true);
             break;
         case "configure_cloud_cluster":
-        case "configure_cloud_resource":
         case "open_cloud_center":
             openCenterUrl("cloudCenter", "클라우드센터 연결");
+            break;
+        case "configure_cloud_resource":
+            setIsCloudResourceOpen(true);
             break;
         case "configure_monitoring":
             setIsMonitoringWizardOpen(true);
@@ -124,6 +130,9 @@ export default function StatusPage() {
             break;
         case "ablestack_update":
             setIsAblestackUpdateOpen(true);
+            break;
+        case "security_evidence":
+            setIsSecurityEvidenceOpen(true);
             break;
         default:
             setActionNotice(`${action} 작업은 아직 화면 액션에 연결되어 있지 않습니다.`);
@@ -244,6 +253,7 @@ export default function StatusPage() {
             <GfsStorageConfigureWizardModal
               isOpen={isGfsWizardOpen}
               onClose={() => setIsGfsWizardOpen(false)}
+              onCompleted={refreshDeployOverview}
             />
 
             <ConfigFileDownloadModal
@@ -267,6 +277,15 @@ export default function StatusPage() {
             <SecurityPatchModal
               isOpen={isSecurityPatchOpen}
               onClose={() => setIsSecurityPatchOpen(false)}
+              onCompleted={(message) => {
+                  setActionNotice(message);
+                  refreshDeployOverview();
+              }}
+            />
+
+            <SecurityEvidenceModal
+              isOpen={isSecurityEvidenceOpen}
+              onClose={() => setIsSecurityEvidenceOpen(false)}
               onCompleted={setActionNotice}
             />
 
@@ -274,6 +293,15 @@ export default function StatusPage() {
               isOpen={isAblestackUpdateOpen}
               onClose={() => setIsAblestackUpdateOpen(false)}
               onCompleted={setActionNotice}
+            />
+
+            <CloudResourceConfigureModal
+              isOpen={isCloudResourceOpen}
+              onClose={() => setIsCloudResourceOpen(false)}
+              onCompleted={(message) => {
+                  setActionNotice(message);
+                  refreshDeployOverview();
+              }}
             />
         </>
     );

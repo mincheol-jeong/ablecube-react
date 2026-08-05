@@ -240,7 +240,6 @@ export default function AblestackUpdateModal({
                                       }}
                                       disabled={isBusy}
                                     >
-                                        <span>{item.type === "all" ? "⬆" : "☁"}</span>
                                         <strong>{item.title}</strong>
                                         <small>{item.description}</small>
                                     </button>

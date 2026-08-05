@@ -72,5 +72,54 @@ Cockpit은 .css 및 .scss 파일의 CSS 코드 스타일을 자동으로 검사�
 
 ## rpm build
 
-RPM을 생성하려면 `sh rpm-builder.sh` 를 실행하세요.
-빌드가 완료되면 결과물은 ./rpmbuild/RPMS/noarch/ 경로에 생성됩니다.
+RPM을 생성하려면 RPM 기반 Linux 환경에서 다음을 실행하세요.
+
+```
+./rpm-builder.sh
+```
+
+스크립트는 프로덕션 `dist/`를 먼저 생성한 후, 해당 정적 파일을 포함한
+`ablestack-cockpit-plugin` RPM과 source RPM을 만듭니다. 결과물은
+`./artifacts/rpm/`에 생성됩니다. 기본 버전은 루트의 `VERSION.md` 파일에서
+읽고, 해당 버전의 `## [버전]` 항목이 `CHANGELOG.md`에 있어야 빌드됩니다.
+두 파일은 RPM 문서에도 포함됩니다.
+
+`--version`으로 버전을 임시 지정할 수도 있지만, 지정한 버전에 해당하는
+CHANGELOG 항목은 반드시 먼저 추가해야 합니다.
+
+```
+./rpm-builder.sh --version v1.2.0 --release 1 --dist .el9
+```
+
+빌드 머신에는 `make`, Node.js/npm, GNU tar 및 `rpm-build` 패키지가 필요합니다.
+
+### 태그로 RPM 릴리스 만들기
+
+GitHub에 `v1.2.0` 형식의 태그를 push하면 `Release RPM` GitHub Actions
+워크플로가 Rocky Linux 9에서 RPM을 만들고, 같은 태그의 GitHub Release에
+binary RPM과 source RPM을 첨부합니다.
+
+```
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+GitHub Actions 화면에서 `Release RPM`을 수동 실행할 수도 있으며, 이때는
+`v`를 제외한 버전(`1.2.0`)과 RPM release 번호를 입력합니다.
+
+Rocky Linux 9 릴리스 워크플로의 결과 파일명은 다음과 같습니다.
+
+```
+ablestack-cockpit-plugin-v1.2.0-1.el9.noarch.rpm
+```
+
+### 버전 관리
+
+릴리스할 때는 먼저 `VERSION.md`의 버전을 변경하고, 같은 버전의 변경 항목을
+`CHANGELOG.md` 맨 위에 추가합니다. 이후 같은 버전의 `v` 태그를 올립니다.
+
+```
+# VERSION.md: v1.2.0
+git tag v1.2.0
+git push origin v1.2.0
+```

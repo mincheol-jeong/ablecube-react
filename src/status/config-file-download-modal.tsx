@@ -39,6 +39,32 @@ interface ConfigFileDownloadModalProps {
   onClose: () => void;
 }
 
+type RecordValue = Record<string, unknown>;
+
+function isRecord(value: unknown): value is RecordValue {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseMaybeJson(value: unknown): unknown {
+    if (typeof value !== "string") return value;
+
+    try {
+        return JSON.parse(value);
+    } catch {
+        return value;
+    }
+}
+
+function unwrapDownloadValue(value: unknown): unknown {
+    const parsed = parseMaybeJson(value);
+
+    if (!isRecord(parsed)) return parsed;
+    if (parsed.val !== undefined) return unwrapDownloadValue(parsed.val);
+    if (parsed.data !== undefined) return unwrapDownloadValue(parsed.data);
+
+    return parsed;
+}
+
 const DOWNLOAD_FILES: DownloadFileDefinition[] = [
     {
         key: "ssh-key-bundle",
@@ -51,11 +77,8 @@ const DOWNLOAD_FILES: DownloadFileDefinition[] = [
         key: "cluster-config-api",
         label: "Cluster 설정 파일 다운로드",
         filename: "cluster.json",
-        source: "file",
-        paths: [
-            "/etc/ablestack/properties/cluster.json",
-            "/etc/ablestack/cluster.json",
-        ],
+        source: "api",
+        apiPath: "/api/v1/cube/cluster/config",
     },
 ];
 
@@ -90,7 +113,7 @@ async function readFirstAvailable(paths: string[]) {
 async function readApiJson(apiPath: string) {
     const content = await requestCubeApi<unknown>(apiPath);
 
-    return JSON.stringify(content, null, 2);
+    return JSON.stringify(unwrapDownloadValue(content), null, 2);
 }
 
 async function readSshKeyBundleHref(apiPath: string) {

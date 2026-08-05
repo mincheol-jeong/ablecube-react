@@ -51,6 +51,8 @@ interface StageItem {
 const LICENSE_STAGE = "license_register";
 const STORAGE_CENTER_CONFIGURE_STAGE = "storage_center_configure";
 const STORAGE_CENTER_CONNECT_STAGE = "storage_center_connect";
+const STORAGE_CLUSTER_CONFIGURE_STAGE = "storage_cluster_configure";
+const HCI_SHARED_FILE_CONFIGURE_STAGE = "hci_shared_file_configure";
 const CLOUD_CENTER_CONFIGURE_STAGE = "cloud_center_configure";
 const CLOUD_CENTER_CONNECT_STAGE = "cloud_center_connect";
 const MONITORING_CENTER_CONFIGURE_STAGE = "monitoring_center_configure";
@@ -58,6 +60,7 @@ const MONITORING_CENTER_CONNECT_STAGE = "monitoring_center_connect";
 const SECURITY_PATCH_STAGE = "security_patch";
 const PRODUCT_FLOW_PENDING_STAGE = "product_flow_pending";
 const VERSION_UPDATE_ACTION = "ablestack_update";
+const SECURITY_EVIDENCE_ACTION = "security_evidence";
 const SECURITY_PATCH_WARNING_KEY = "security_patch_required";
 const STORAGE_CENTER_PRODUCT_TYPES = new Set([
     "ablestack-hci",
@@ -72,7 +75,11 @@ const ALWAYS_AVAILABLE_ACTIONS = [
     "download_config_file",
     "manage_license",
 ];
-const MANAGEMENT_ACTIONS = new Set([...ALWAYS_AVAILABLE_ACTIONS, VERSION_UPDATE_ACTION]);
+const MANAGEMENT_ACTIONS = new Set([
+    ...ALWAYS_AVAILABLE_ACTIONS,
+    VERSION_UPDATE_ACTION,
+    SECURITY_EVIDENCE_ACTION,
+]);
 
 const PRODUCT_LABELS: Record<string, string> = {
     "ablestack-hci": "ABLESTACK-HCI",
@@ -88,8 +95,8 @@ const STAGE_LABELS: Record<string, string> = {
     storage_vm_configure: "스토리지 VM 구성",
     [STORAGE_CENTER_CONFIGURE_STAGE]: "스토리지센터 구성",
     [STORAGE_CENTER_CONNECT_STAGE]: "스토리지센터 연결",
-    storage_cluster_configure: "스토리지 클러스터 구성",
-    hci_shared_file_configure: "HCI 공유 파일 구성",
+    [STORAGE_CLUSTER_CONFIGURE_STAGE]: "스토리지 클러스터 상세 구성",
+    [HCI_SHARED_FILE_CONFIGURE_STAGE]: "RBD/GFS 구성",
     gfs_storage_configure: "GFS 스토리지 구성",
     local_storage_configure: "로컬 스토리지 구성",
     cloud_vm_deploy: "클라우드 VM 배포",
@@ -111,8 +118,8 @@ const MESSAGE_LABELS: Record<string, string> = {
     cluster_config_required: "클러스터 구성 준비가 필요합니다.",
     storage_vm_not_deployed: "스토리지센터 VM 배포가 필요합니다.",
     storage_vm_not_configured: "스토리지센터 구성이 필요합니다.",
-    storage_cluster_not_configured: "스토리지 클러스터 구성이 필요합니다.",
-    hci_shared_file_not_configured: "HCI 공유 파일 구성이 필요합니다.",
+    storage_cluster_not_configured: "스토리지 클러스터 상세 구성이 필요합니다.",
+    hci_shared_file_not_configured: "RBD/GFS 구성이 필요합니다.",
     gfs_storage_not_configured: "GFS 스토리지 구성이 필요합니다.",
     local_storage_not_configured: "로컬 스토리지 구성이 필요합니다.",
     cloud_vm_not_deployed: "클라우드센터 VM 배포가 필요합니다.",
@@ -133,8 +140,8 @@ const ACTION_LABELS: Record<string, string> = {
     deploy_storage_vm: "스토리지 VM 배포",
     configure_storage_vm: "스토리지센터 구성",
     open_storage_center: "스토리지센터 연결",
-    configure_storage_cluster: "스토리지 클러스터 구성",
-    configure_hci_shared_file: "HCI 공유 파일 구성",
+    configure_storage_cluster: "스토리지 클러스터 상세 구성",
+    configure_hci_shared_file: "RBD/GFS 구성",
     configure_gfs_storage: "GFS 스토리지 구성",
     configure_local_storage: "로컬 스토리지 구성",
     deploy_cloud_vm: "클라우드 VM 배포",
@@ -145,6 +152,7 @@ const ACTION_LABELS: Record<string, string> = {
     open_cloud_center: "클라우드센터 연결",
     open_monitoring_center: "모니터링센터 연결",
     run_security_patch: "취약점 조치",
+    [SECURITY_EVIDENCE_ACTION]: "보안 증적",
     [VERSION_UPDATE_ACTION]: "ABLESTACK 업데이트",
 };
 
@@ -153,14 +161,14 @@ const ACTION_STAGE: Record<string, string> = {
     download_config_file: "cluster_prepare",
     prepare_cluster_config: "cluster_prepare",
     deploy_storage_vm: "storage_vm_configure",
-    configure_storage_vm: "storage_vm_configure",
+    configure_storage_vm: STORAGE_CENTER_CONFIGURE_STAGE,
     open_storage_center: STORAGE_CENTER_CONNECT_STAGE,
-    configure_storage_cluster: STORAGE_CENTER_CONFIGURE_STAGE,
-    configure_hci_shared_file: "hci_shared_file_configure",
+    configure_storage_cluster: STORAGE_CLUSTER_CONFIGURE_STAGE,
+    configure_hci_shared_file: HCI_SHARED_FILE_CONFIGURE_STAGE,
     configure_gfs_storage: "gfs_storage_configure",
     configure_local_storage: "local_storage_configure",
     deploy_cloud_vm: "cloud_vm_configure",
-    configure_cloud_vm: "cloud_vm_configure",
+    configure_cloud_vm: CLOUD_CENTER_CONFIGURE_STAGE,
     configure_cloud_cluster: CLOUD_CENTER_CONFIGURE_STAGE,
     configure_cloud_resource: CLOUD_CENTER_CONFIGURE_STAGE,
     configure_monitoring: MONITORING_CENTER_CONFIGURE_STAGE,
@@ -173,12 +181,13 @@ const FLOW_STAGE_ACTIONS: Record<string, string[]> = {
     [LICENSE_STAGE]: ["manage_license"],
     cluster_prepare: ["prepare_cluster_config", "download_config_file"],
     storage_vm_configure: ["deploy_storage_vm", "configure_storage_vm", "download_config_file"],
-    [STORAGE_CENTER_CONFIGURE_STAGE]: ["configure_storage_cluster"],
+    [STORAGE_CENTER_CONFIGURE_STAGE]: ["configure_storage_vm"],
+    [STORAGE_CLUSTER_CONFIGURE_STAGE]: ["configure_storage_cluster"],
     [STORAGE_CENTER_CONNECT_STAGE]: ["open_storage_center"],
-    hci_shared_file_configure: ["configure_hci_shared_file"],
+    [HCI_SHARED_FILE_CONFIGURE_STAGE]: ["configure_hci_shared_file"],
     gfs_storage_configure: ["configure_gfs_storage", "download_config_file"],
     local_storage_configure: ["configure_local_storage", "download_config_file"],
-    cloud_vm_configure: ["deploy_cloud_vm", "configure_cloud_vm", "download_config_file"],
+    cloud_vm_configure: ["deploy_cloud_vm", "download_config_file"],
     [CLOUD_CENTER_CONFIGURE_STAGE]: ["configure_cloud_cluster", "configure_cloud_resource"],
     [CLOUD_CENTER_CONNECT_STAGE]: ["open_cloud_center"],
     [MONITORING_CENTER_CONFIGURE_STAGE]: ["configure_monitoring"],
@@ -190,13 +199,14 @@ const STAGE_CLICK_ACTION: Record<string, string> = {
     [LICENSE_STAGE]: "manage_license",
     cluster_prepare: "prepare_cluster_config",
     storage_vm_configure: "configure_storage_vm",
-    [STORAGE_CENTER_CONFIGURE_STAGE]: "configure_storage_cluster",
+    [STORAGE_CENTER_CONFIGURE_STAGE]: "configure_storage_vm",
+    [STORAGE_CLUSTER_CONFIGURE_STAGE]: "configure_storage_cluster",
     [STORAGE_CENTER_CONNECT_STAGE]: "open_storage_center",
-    hci_shared_file_configure: "configure_hci_shared_file",
+    [HCI_SHARED_FILE_CONFIGURE_STAGE]: "configure_hci_shared_file",
     gfs_storage_configure: "configure_gfs_storage",
     local_storage_configure: "configure_local_storage",
     cloud_vm_configure: "configure_cloud_vm",
-    [CLOUD_CENTER_CONFIGURE_STAGE]: "configure_cloud_cluster",
+    [CLOUD_CENTER_CONFIGURE_STAGE]: "configure_cloud_vm",
     [CLOUD_CENTER_CONNECT_STAGE]: "open_cloud_center",
     [MONITORING_CENTER_CONFIGURE_STAGE]: "configure_monitoring",
     [MONITORING_CENTER_CONNECT_STAGE]: "open_monitoring_center",
@@ -207,7 +217,7 @@ const DEPLOY_RUN_STEP_LABELS: Record<string, string> = {
     cluster_apply: "클러스터 구성 적용",
     scvm_prepare: "스토리지 VM 준비",
     scvm_bootstrap: "스토리지 VM 후처리",
-    storage_prepare: "스토리지 구성 준비",
+    storage_prepare: "GFS/RBD 구성 준비",
     local_prepare: "로컬 스토리지 준비",
     ccvm_prepare: "클라우드 VM 준비",
     ccvm_bootstrap: "클라우드 VM 후처리",
@@ -218,9 +228,10 @@ const STAGE_DESCRIPTIONS: Record<string, string> = {
     [LICENSE_STAGE]: "라이선스 API로 등록한 뒤 systemProfile.license.status 값을 갱신합니다.",
     cluster_prepare: "클러스터 구성 파일과 호스트 상태를 확인하고 cluster apply를 준비합니다.",
     storage_vm_configure: "SCVM cloud-init, XML, lifecycle API 흐름으로 스토리지 VM을 준비합니다.",
-    [STORAGE_CENTER_CONFIGURE_STAGE]: "Storage Center 초기 구성과 Glue 클러스터 상태를 확인합니다.",
+    [STORAGE_CENTER_CONFIGURE_STAGE]: "SCVM bootstrap을 실행해 스토리지센터 초기 구성을 완료합니다.",
     [STORAGE_CENTER_CONNECT_STAGE]: "API가 반환한 Storage Center URL로 접속해 구성을 이어갑니다.",
-    hci_shared_file_configure: "RBD/GFS API 흐름으로 HCI 공유 파일 구성을 진행합니다.",
+    [STORAGE_CLUSTER_CONFIGURE_STAGE]: "SCVM host 등록 상태를 확인하고 OSD 등록, rbd pool 구성을 진행합니다.",
+    [HCI_SHARED_FILE_CONFIGURE_STAGE]: "RBD image 생성, 물리 host rbd map, GFS API 흐름으로 HCI Filesystem 구성을 진행합니다.",
     gfs_storage_configure: "GFS disk/resource 상태를 확인하고 필요한 GFS 구성을 진행합니다.",
     local_storage_configure: "local manage API 또는 올인원 Job으로 로컬 스토리지 구성을 진행합니다.",
     cloud_vm_configure: "CCVM cloud-init, XML, lifecycle setup 흐름으로 클라우드 VM을 준비합니다.",
@@ -252,15 +263,16 @@ const HCI_STAGES: StageItem[] = [
     { id: "cluster_prepare", label: STAGE_LABELS.cluster_prepare },
     { id: "storage_vm_configure", label: STAGE_LABELS.storage_vm_configure },
     { id: STORAGE_CENTER_CONFIGURE_STAGE, label: STAGE_LABELS[STORAGE_CENTER_CONFIGURE_STAGE] },
+    { id: STORAGE_CLUSTER_CONFIGURE_STAGE, label: STAGE_LABELS[STORAGE_CLUSTER_CONFIGURE_STAGE] },
     { id: "cloud_vm_configure", label: STAGE_LABELS.cloud_vm_configure },
     { id: CLOUD_CENTER_CONFIGURE_STAGE, label: STAGE_LABELS[CLOUD_CENTER_CONFIGURE_STAGE] },
     { id: MONITORING_CENTER_CONFIGURE_STAGE, label: STAGE_LABELS[MONITORING_CENTER_CONFIGURE_STAGE] },
 ];
 
 const HCI_FILESYSTEM_STAGES: StageItem[] = [
-    ...HCI_STAGES.slice(0, 4),
-    { id: "hci_shared_file_configure", label: STAGE_LABELS.hci_shared_file_configure },
-    ...HCI_STAGES.slice(4),
+    ...HCI_STAGES.slice(0, 5),
+    { id: HCI_SHARED_FILE_CONFIGURE_STAGE, label: STAGE_LABELS[HCI_SHARED_FILE_CONFIGURE_STAGE] },
+    ...HCI_STAGES.slice(5),
 ];
 
 const VM_STAGES: StageItem[] = [
@@ -329,9 +341,9 @@ function isStageDone(stage: string, status: DeployStatusData): boolean {
     case STORAGE_CENTER_CONFIGURE_STAGE:
     case STORAGE_CENTER_CONNECT_STAGE:
         return isTrueStatus(raw.storageVmBootstrapStatus);
-    case "storage_cluster_configure":
+    case STORAGE_CLUSTER_CONFIGURE_STAGE:
         return isHealthyStatus(raw.storageClusterStatus);
-    case "hci_shared_file_configure":
+    case HCI_SHARED_FILE_CONFIGURE_STAGE:
     case "gfs_storage_configure":
         return isTrueStatus(raw.gfsConfigureStatus);
     case "local_storage_configure":
@@ -569,7 +581,7 @@ function securityPatchAction(status: DeployStatusData, isFlowComplete: boolean):
 
 function managementActionsFor(isFlowComplete: boolean): string[] {
     return isFlowComplete
-        ? [...ALWAYS_AVAILABLE_ACTIONS, VERSION_UPDATE_ACTION]
+        ? [...ALWAYS_AVAILABLE_ACTIONS, SECURITY_EVIDENCE_ACTION, VERSION_UPDATE_ACTION]
         : ALWAYS_AVAILABLE_ACTIONS;
 }
 
@@ -597,12 +609,49 @@ function connectionActions(status: DeployStatusData): string[] {
 function visibleActions(status: DeployStatusData, currentStage: string): string[] {
     const isLicenseActionRequired = currentStage === LICENSE_STAGE ||
         (status.raw.licenseStatus && !isTrueStatus(status.raw.licenseStatus));
+    const fallbackActions: string[] = [];
+
+    if (
+        currentStage === STORAGE_CENTER_CONFIGURE_STAGE &&
+        isRunningStatus(status.raw.storageVmStatus) &&
+        !isTrueStatus(status.raw.storageVmBootstrapStatus)
+    ) {
+        fallbackActions.push("configure_storage_vm");
+    }
+
+    if (
+        currentStage === STORAGE_CLUSTER_CONFIGURE_STAGE &&
+        STORAGE_CENTER_PRODUCT_TYPES.has(status.osType) &&
+        isStageDone(STORAGE_CENTER_CONFIGURE_STAGE, status) &&
+        !isStageDone(STORAGE_CLUSTER_CONFIGURE_STAGE, status)
+    ) {
+        fallbackActions.push("configure_storage_cluster");
+    }
+
+    if (
+        currentStage === HCI_SHARED_FILE_CONFIGURE_STAGE &&
+        status.osType === "ablestack-hci-filesystem" &&
+        isStageDone(STORAGE_CLUSTER_CONFIGURE_STAGE, status) &&
+        !isStageDone(HCI_SHARED_FILE_CONFIGURE_STAGE, status)
+    ) {
+        fallbackActions.push("configure_hci_shared_file");
+    }
+
+    if (
+        currentStage === CLOUD_CENTER_CONFIGURE_STAGE &&
+        isRunningStatus(status.raw.cloudVmStatus) &&
+        !isTrueStatus(status.raw.cloudVmBootstrapStatus)
+    ) {
+        fallbackActions.push("configure_cloud_vm");
+    }
+
     const actions = isLicenseActionRequired
         ? ["manage_license"]
         : [
             ...status.availableActions.filter((action) => ACTION_STAGE[action] === currentStage),
             ...(FLOW_STAGE_ACTIONS[currentStage] ?? []).filter((action) =>
                 status.availableActions.includes(action)),
+            ...fallbackActions,
         ];
 
     return Array.from(new Set(actions));
@@ -622,48 +671,6 @@ function actionClassName(action: string): string {
     }
 
     return "ct-deploy-ribbon__action ct-deploy-ribbon__action--workflow";
-}
-
-function actionIcon(action: string): React.ReactNode {
-    const emojiClassName = "ct-action-emoji";
-
-    switch (action) {
-    case "manage_license":
-        return <span aria-hidden="true" className={emojiClassName}>🔑</span>;
-    case "download_config_file":
-        return <span aria-hidden="true" className={emojiClassName}>⬇</span>;
-    case "run_security_patch":
-        return <span aria-hidden="true" className={emojiClassName}>📋</span>;
-    case VERSION_UPDATE_ACTION:
-        return <span aria-hidden="true" className={emojiClassName}>⬆</span>;
-    case "open_storage_center":
-        return <span aria-hidden="true" className={emojiClassName}>🗄</span>;
-    case "open_cloud_center":
-        return <span aria-hidden="true" className={emojiClassName}>☁</span>;
-    case "open_monitoring_center":
-        return <span aria-hidden="true" className={emojiClassName}>📊</span>;
-    case "prepare_cluster_config":
-    case "configure_cloud_cluster":
-    case "configure_storage_cluster":
-        return <span aria-hidden="true" className={emojiClassName}>📋</span>;
-    case "deploy_storage_vm":
-    case "configure_storage_vm":
-        return <span aria-hidden="true" className={emojiClassName}>💾</span>;
-    case "deploy_cloud_vm":
-    case "configure_cloud_vm":
-        return <span aria-hidden="true" className={emojiClassName}>🖥</span>;
-    case "configure_monitoring":
-        return <span aria-hidden="true" className={emojiClassName}>📊</span>;
-    case "configure_cloud_resource":
-    case "configure_hci_shared_file":
-    case "configure_gfs_storage":
-    case "configure_local_storage":
-        return <span aria-hidden="true" className={emojiClassName}>🗄</span>;
-    case "all_in_one":
-        return <span aria-hidden="true" className={emojiClassName}>📋</span>;
-    default:
-        return <span aria-hidden="true" className={emojiClassName}>📋</span>;
-    }
 }
 
 function stageClickAction(stage: string, state: "done" | "current" | "pending"): string {
@@ -979,7 +986,6 @@ export default function DeploymentOverview({
                                             <Button
                                               key={action}
                                               variant="secondary"
-                                              icon={actionIcon(action)}
                                               className={actionClassName(action)}
                                               onClick={() => onAction(action)}
                                             >
@@ -1044,7 +1050,6 @@ export default function DeploymentOverview({
                                                 <Button
                                                   key={action}
                                                   variant="secondary"
-                                                  icon={actionIcon(action)}
                                                   className={actionClassName(action)}
                                                   onClick={() => onAction(action)}
                                                 >
@@ -1054,7 +1059,6 @@ export default function DeploymentOverview({
                                         {showDeployRunControl && (
                                             <Button
                                               variant="secondary"
-                                              icon={actionIcon("all_in_one")}
                                               className="ct-deploy-ribbon__action ct-deploy-ribbon__action--workflow"
                                               onClick={onOpenDeployRun}
                                             >
@@ -1066,7 +1070,6 @@ export default function DeploymentOverview({
                                         <div className="ct-deploy-ribbon__utility-menu">
                                             <Button
                                               variant="secondary"
-                                              icon={<span aria-hidden="true" className="ct-action-emoji">🧰</span>}
                                               className="ct-deploy-ribbon__action ct-deploy-ribbon__action--utility"
                                               aria-expanded={isManagementActionsOpen}
                                               onClick={() => setIsManagementActionsOpen((current) => !current)}
@@ -1093,7 +1096,6 @@ export default function DeploymentOverview({
                                                     <Button
                                                       key={action}
                                                       variant="secondary"
-                                                      icon={actionIcon(action)}
                                                       className={actionClassName(action)}
                                                       isDisabled={!isManagementActionsOpen}
                                                       onClick={() => {
@@ -1257,7 +1259,6 @@ export default function DeploymentOverview({
                                     <Button
                                       key={action}
                                       variant="primary"
-                                      icon={actionIcon(action)}
                                       onClick={() => onAction(action)}
                                     >
                                         {ACTION_LABELS[action] ?? action}
@@ -1265,7 +1266,6 @@ export default function DeploymentOverview({
                                 ))}
                             <Button
                               variant="secondary"
-                              icon={actionIcon("all_in_one")}
                               onClick={onOpenDeployRun}
                             >
                                 올인원 단계 입력

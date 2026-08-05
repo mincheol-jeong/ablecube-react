@@ -26,6 +26,12 @@ import { InfoCircleIcon, AngleRightIcon, ExclamationTriangleIcon } from "@patter
 
 import ValidationErrorModal from "../components/common/ValidationErrorModal";
 import { fetchClusterConfigProfile } from "../services/api/cluster-config";
+import {
+  configureGfsStonith,
+  initGfsPcsCluster,
+  setGfsPcsAlert,
+  type GfsManageStonithDevice,
+} from "../services/api/gfs-manage";
 import { fetchDiskInventory, type DiskInventoryOption } from "../services/api/inventory";
 import {
   formatMultipathSyncAction,
@@ -37,11 +43,13 @@ import {
 import "./gfs-storage-configure-wizard.scss";
 import { isIpv4 } from "./validation";
 
-type DeployPhase = "idle" | "running" | "done";
+type DeployPhase = "idle" | "running" | "done" | "error";
 type ExternalSyncMode = "duplication" | "single" | "skip";
 type ExternalSyncPhase = "idle" | "running" | "success" | "error";
 type IpmiMode = "common" | "individual";
 type InventoryLoadState = "idle" | "loading" | "success" | "error";
+type DeployStepId = "pcs" | "stonith" | "alert";
+type DeployStepStatus = "pending" | "running" | "succeeded" | "failed";
 
 interface MonitoringHostIpmi {
   hostName: string;
@@ -53,11 +61,13 @@ interface MonitoringHostIpmi {
 interface GfsStorageConfigureWizardModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onCompleted?: () => void;
 }
 
 export default function GfsStorageConfigureWizardModal({
   isOpen,
   onClose,
+  onCompleted,
 }: GfsStorageConfigureWizardModalProps) {
   const [externalSyncMode, setExternalSyncMode] = React.useState<ExternalSyncMode>("duplication");
   const [selectedDisks, setSelectedDisks] = React.useState<string[]>([]);
@@ -84,6 +94,12 @@ export default function GfsStorageConfigureWizardModal({
   const [externalSyncMessage, setExternalSyncMessage] = React.useState("");
   const [externalSyncResult, setExternalSyncResult] = React.useState<MultipathSyncResult | null>(null);
   const [deployPhase, setDeployPhase] = React.useState<DeployPhase>("idle");
+  const [deployMessage, setDeployMessage] = React.useState("");
+  const [deploySteps, setDeploySteps] = React.useState<Record<DeployStepId, DeployStepStatus>>({
+    pcs: "pending",
+    stonith: "pending",
+    alert: "pending",
+  });
   const [disableNav, setDisableNav] = React.useState(false);
 
   const nextStepRef = React.useRef<null | (() => void)>(null);
@@ -109,6 +125,8 @@ export default function GfsStorageConfigureWizardModal({
     setExternalSyncMessage("");
     setExternalSyncResult(null);
     setDeployPhase("idle");
+    setDeployMessage("");
+    setDeploySteps({ pcs: "pending", stonith: "pending", alert: "pending" });
     setDisableNav(false);
   }, []);
 
@@ -303,6 +321,55 @@ export default function GfsStorageConfigureWizardModal({
     }
   };
 
+  const setDeployStep = (step: DeployStepId, status: DeployStepStatus) => {
+    setDeploySteps((prev) => ({ ...prev, [step]: status }));
+  };
+
+  const stonithDevices = (): GfsManageStonithDevice[] => ipmiHosts.map((host) => ({
+    ipaddr: host.ip.trim(),
+    ipport: "623",
+    login: ipmiMode === "common" ? ipmiCommonUser.trim() : host.username.trim(),
+    passwd: ipmiMode === "common" ? ipmiCommonPass : host.password,
+    hostname: host.hostName,
+  }));
+
+  const executeDeploy = async () => {
+    setDeployMessage("GFS PCS 초기화를 시작하고 있습니다.");
+    setDeploySteps({ pcs: "running", stonith: "pending", alert: "pending" });
+
+    try {
+      await initGfsPcsCluster(selectedDisks);
+      setDeployStep("pcs", "succeeded");
+      setDeployStep("stonith", "running");
+      setDeployMessage("IPMI STONITH 구성을 적용하고 있습니다.");
+
+      await configureGfsStonith(stonithDevices());
+      setDeployStep("stonith", "succeeded");
+      setDeployStep("alert", "running");
+      setDeployMessage("PCS 알림 구성을 적용하고 있습니다.");
+
+      await setGfsPcsAlert();
+      setDeployStep("alert", "succeeded");
+      setDeployPhase("done");
+      setDisableNav(false);
+      setDeployMessage("GFS PCS 초기화와 IPMI STONITH 구성이 완료되었습니다.");
+      onCompleted?.();
+    } catch (error) {
+      setDeployPhase("error");
+      setDisableNav(false);
+      setDeployMessage(error instanceof Error ? error.message : "GFS 구성 API 실행에 실패했습니다.");
+      setDeploySteps((prev) => {
+        const next = { ...prev };
+        (Object.keys(next) as DeployStepId[]).forEach((step) => {
+          if (next[step] === "running") {
+            next[step] = "failed";
+          }
+        });
+        return next;
+      });
+    }
+  };
+
   const startDeploy = () => {
     const message = validateGfsStorage();
     if (message) {
@@ -315,10 +382,38 @@ export default function GfsStorageConfigureWizardModal({
     setConfirmOpen(false);
     setDeployPhase("running");
     setDisableNav(true);
+    setDeployMessage("");
+    setDeploySteps({ pcs: "pending", stonith: "pending", alert: "pending" });
     nextStepRef.current?.();
+    void executeDeploy();
   };
 
   const diskLabel = (diskId: string) => gfsDiskOptions.find((disk) => disk.value === diskId)?.label || diskId;
+  const deployStepLabel = (status: DeployStepStatus) => {
+    switch (status) {
+    case "succeeded":
+      return "완료";
+    case "running":
+      return "진행 중";
+    case "failed":
+      return "실패";
+    default:
+      return "대기";
+    }
+  };
+  const deployStepColor = (status: DeployStepStatus): "green" | "orange" | "red" | "grey" | "blue" => {
+    switch (status) {
+    case "succeeded":
+      return "green";
+    case "running":
+      return "blue";
+    case "failed":
+      return "red";
+    case "pending":
+    default:
+      return "grey";
+    }
+  };
 
   const wizardFooter = (
     activeStep: any,
@@ -345,9 +440,11 @@ export default function GfsStorageConfigureWizardModal({
         return;
       }
       if (isDeploy) {
-        if (deployPhase === "running") {
-          setDeployPhase("done");
-          setDisableNav(false);
+        if (deployPhase === "error") {
+          setConfirmOpen(true);
+          return;
+        }
+        if (deployPhase !== "done") {
           return;
         }
         goToNextStep();
@@ -363,14 +460,21 @@ export default function GfsStorageConfigureWizardModal({
     const primaryLabel = isReview
       ? "구성"
       : isDeploy
-        ? "완료"
+        ? deployPhase === "done"
+          ? "완료"
+          : deployPhase === "error"
+            ? "다시 구성"
+            : "구성 중"
       : isFinish
         ? "닫기"
         : "다음";
+    const primaryDisabled = isExternalSyncRequired ||
+      isExternalSyncRunning ||
+      (isDeploy && deployPhase !== "done" && deployPhase !== "error");
 
     return (
       <div className="ct-gfs-storage-wizard__footer">
-        <Button variant="primary" onClick={handlePrimary} isDisabled={isExternalSyncRequired || isExternalSyncRunning}>
+        <Button variant="primary" onClick={handlePrimary} isDisabled={primaryDisabled}>
           {primaryLabel}
         </Button>
         {!isFirst && !isDeploy && !isFinish && (
@@ -903,27 +1007,39 @@ export default function GfsStorageConfigureWizardModal({
           <WizardStep name="구성" id="gfs-deploy">
             <div className="ct-gfs-storage-wizard__content">
               <Content component="p" className="ct-gfs-storage-wizard__deploy-title">
-                GFS 스토리지를 구성 중입니다. 전체 3단계 중 {deployPhase === "done" ? "3" : "2"}단계 진행 중입니다.
+                GFS PCS 초기화와 IPMI STONITH 구성을 API로 실행합니다.
               </Content>
               <div className="ct-gfs-storage-wizard__status-list">
                 <div>
-                  <Label color="green">완료됨</Label>
-                  <span>클러스터 구성 HOST 간 연결 상태 확인</span>
+                  <Label color={deployStepColor(deploySteps.pcs)}>
+                    {deployStepLabel(deploySteps.pcs)}
+                  </Label>
+                  {deploySteps.pcs === "running" && <Spinner size="sm" />}
+                  <span>PCS 클러스터 초기화 및 GFS 디스크 준비</span>
                 </div>
                 <div>
-                  <Label color={deployPhase === "done" ? "green" : "orange"}>
-                    {deployPhase === "done" ? "완료됨" : "진행중"}
+                  <Label color={deployStepColor(deploySteps.stonith)}>
+                    {deployStepLabel(deploySteps.stonith)}
                   </Label>
-                  {deployPhase === "running" && <Spinner size="sm" />}
-                  <span>클러스터 구성 설정 초기화 작업</span>
+                  {deploySteps.stonith === "running" && <Spinner size="sm" />}
+                  <span>IPMI STONITH 리소스 구성</span>
                 </div>
                 <div>
-                  <Label color={deployPhase === "done" ? "green" : "blue"}>
-                    {deployPhase === "done" ? "완료됨" : "준비중"}
+                  <Label color={deployStepColor(deploySteps.alert)}>
+                    {deployStepLabel(deploySteps.alert)}
                   </Label>
-                  <span>GFS 구성 설정 및 PCS 구성 설정</span>
+                  {deploySteps.alert === "running" && <Spinner size="sm" />}
+                  <span>PCS 알림 파일 및 alert 구성</span>
                 </div>
               </div>
+              {deployMessage && (
+                <Alert
+                  isInline
+                  variant={deployPhase === "error" ? "danger" : deployPhase === "done" ? "success" : "info"}
+                  title={deployMessage}
+                  className="ct-gfs-storage-wizard__inline-alert"
+                />
+              )}
             </div>
           </WizardStep>
 

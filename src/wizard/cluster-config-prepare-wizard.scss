@@ -348,17 +348,6 @@
   box-shadow: none;
 }
 
-.ct-file-attach__icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  background: #e7f0ff;
-  color: #1f70ff;
-}
-
 .ct-file-attach__copy {
   display: grid;
   min-width: 0;
@@ -483,11 +472,6 @@
   .ct-file-attach--selected .ct-file-attach__surface {
     border-color: #46a758;
     background: #12251a;
-  }
-
-  .ct-file-attach__icon {
-    background: #203754;
-    color: #93c5fd;
   }
 
   .ct-file-attach__copy strong {
