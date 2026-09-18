@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 Name:           ablestack-cockpit-plugin
-Version:        v1.0.0
+Version:        v1.0.1
 Release:        1%{?dist}
 Summary:        ABLESTACK Cockpit plugin
 
@@ -35,5 +35,8 @@ install -Dpm 0644 io.ablecloud.ablestack.metainfo.xml \
 %{_datadir}/metainfo/io.ablecloud.ablestack.metainfo.xml
 
 %changelog
+* Fri Sep 18 2026 Ablecloud <support@ablecloud.io> - v1.0.1-1
+- Update Cockpit UI, RPM release automation, and version management.
+
 * Wed Aug 05 2026 Ablecloud <support@ablecloud.io> - v1.0.0-1
 - Initial package

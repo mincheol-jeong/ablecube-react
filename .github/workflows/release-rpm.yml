@@ -91,10 +91,28 @@ jobs:
             release_tag="$GITHUB_REF_NAME"
           fi
 
+          if ! awk -v heading="## [${release_tag}]" '
+              index($0, heading) == 1 { found = 1 }
+              found && /^## / && index($0, heading) != 1 { exit }
+              found { print }
+              END { if (!found) exit 1 }
+            ' CHANGELOG.md > release-notes.md; then
+            echo "CHANGELOG.md does not contain release notes for ${release_tag}." >&2
+            exit 2
+          fi
+
+          test -s release-notes.md || {
+            echo "CHANGELOG.md does not contain release notes for ${release_tag}." >&2
+            exit 2
+          }
+
           if gh release view "$release_tag" >/dev/null 2>&1; then
+            gh release edit "$release_tag" \
+              --title "ablestack-cockpit-plugin ${release_tag}" \
+              --notes-file release-notes.md
             gh release upload "$release_tag" artifacts/rpm/*.rpm --clobber
           else
             gh release create "$release_tag" artifacts/rpm/*.rpm \
               --title "ablestack-cockpit-plugin ${release_tag}" \
-              --generate-notes
+              --notes-file release-notes.md
           fi

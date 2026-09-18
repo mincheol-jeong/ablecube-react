@@ -3,10 +3,13 @@
 ABLESTACK Cockpit UI의 변경 이력은 이 파일에 기록합니다. RPM 버전은
 `VERSION` 파일을 기준으로 관리합니다.
 
-## Unreleased
+## [v1.0.1] - 2026-09-18
 
 ### Changed
 
+- `main` 브랜치에 Pull Request가 merge되면 patch 버전을 자동 증가시키고, 새 `VERSION`과 동일한 CHANGELOG 버전 제목에 PR 제목과 번호를 기록하는 GitHub Actions 자동화를 추가했습니다. 동일 PR의 워크플로 재실행은 중복 버전 증가 없이 종료합니다.
+- GitHub Release의 자동 생성 `Full Changelog` 문구를 현재 태그와 일치하는 `CHANGELOG.md` 버전 항목으로 교체했습니다. 기존 Release를 다시 실행하는 경우에도 RPM 파일과 함께 Release 제목과 본문을 최신 CHANGELOG 내용으로 갱신합니다.
+- 모든 변경 이력을 `Unreleased`가 아닌 현재 `VERSION`과 동일한 버전 제목 아래 기록하고, 버전 파일과 CHANGELOG를 먼저 커밋한 뒤 동일한 태그를 생성하도록 릴리스 순서를 정리했습니다.
 - RPM 버전 기준 파일을 API 저장소와 동일한 루트 `VERSION`으로 통일했습니다. 로컬 RPM 빌드는 이 값을 자동 반영하고, GitHub 태그·수동 릴리스 버전이 `VERSION`과 다르면 빌드를 중단해 RPM, Git 태그와 문서 버전의 불일치를 방지합니다.
 - 현재 ABLESTACK 저장소에서 사용하지 않고 Cockpit Files 템플릿 설정과 외부 Weblate 저장소에 의존하던 `weblate-sync-pot`, `weblate-sync-po`, `cockpit-lib-update`, `tasks-container-update` GitHub Actions 워크플로를 제거했습니다. 태그 기반 RPM 릴리스 워크플로는 그대로 유지합니다.
 - RPM 빌더 도움말의 이전 `noarch` 안내를 실제 생성 아키텍처인 `x86_64`로 수정했습니다.

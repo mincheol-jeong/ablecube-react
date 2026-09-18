@@ -97,7 +97,9 @@ CHANGELOG 항목은 반드시 먼저 추가해야 합니다.
 
 GitHub에 `v1.2.0` 형식의 태그를 push하면 `Release RPM` GitHub Actions
 워크플로가 Rocky Linux 9에서 RPM을 만들고, 같은 태그의 GitHub Release에
-binary RPM과 source RPM을 첨부합니다.
+binary RPM과 source RPM을 첨부합니다. Release 본문에는 GitHub 자동 생성
+문구 대신 태그와 동일한 `CHANGELOG.md` 버전 항목이 사용됩니다. 기존
+Release를 다시 빌드해도 RPM 파일과 Release 본문을 함께 갱신합니다.
 
 ```
 git tag v1.2.0
@@ -116,10 +118,22 @@ ablestack-cockpit-plugin-v1.2.0-1.el9.x86_64.rpm
 ### 버전 관리
 
 릴리스할 때는 먼저 `VERSION`의 버전을 변경하고, 같은 버전의 변경 항목을
-`CHANGELOG.md` 맨 위에 추가합니다. 이후 같은 버전의 `v` 태그를 올립니다.
+`CHANGELOG.md` 맨 위에 추가합니다. 이 변경을 반드시 커밋하고 main 브랜치에
+push한 다음, 그 커밋에 같은 버전의 `v` 태그를 생성해야 합니다. 커밋하기 전에
+태그를 만들면 GitHub Actions는 변경 전 `VERSION`과 CHANGELOG를 읽게 됩니다.
+
+Pull Request가 `main`에 merge되면 `Bump version after merge` 워크플로가
+현재 버전의 patch 번호를 자동으로 올리고, 같은 버전의 CHANGELOG 제목과
+merge된 PR 제목·번호를 기록한 후 `VERSION`과 `CHANGELOG.md`를 커밋합니다.
+동일한 PR 워크플로를 재실행해도 버전은 중복 증가하지 않습니다.
 
 ```
 # VERSION: v1.2.0
-git tag v1.2.0
-git push origin v1.2.0
+git status --short
+git add -A
+git diff --cached --stat
+git commit -m "Release v1.2.0"
+git push origin main
+git tag "$(cat VERSION)"
+git push origin "$(cat VERSION)"
 ```

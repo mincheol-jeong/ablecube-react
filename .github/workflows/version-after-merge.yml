@@ -1,0 +1,51 @@
+name: Bump version after merge
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+
+permissions:
+  contents: write
+
+concurrency:
+  group: version-after-merge-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  bump-version:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the merged branch
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Increment patch version and update CHANGELOG
+        id: bump
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: bash .github/scripts/bump-version-after-merge.sh
+
+      - name: Commit version files
+        env:
+          NEXT_VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- VERSION CHANGELOG.md; then
+            echo "No version update is required."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION CHANGELOG.md
+          git commit -m "chore: bump version to ${NEXT_VERSION}"
+          git push origin HEAD:main
