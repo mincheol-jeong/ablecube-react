@@ -11,6 +11,7 @@ const FALLBACK_STATUS_CARD_REFRESH_INTERVAL_MS =
 interface UseStatusPollingOptions<T> {
     fetcher: () => Promise<T>;
     fallback: T;
+    enabled?: boolean;
     intervalMs?: number;
     onSuccess?: (data: T) => void;
     onError?: (error: unknown) => void;
@@ -20,6 +21,7 @@ interface UseStatusPollingOptions<T> {
 export function useStatusPolling<T>({
     fetcher,
     fallback,
+    enabled = true,
     intervalMs,
     onSuccess,
     onError,
@@ -31,6 +33,7 @@ export function useStatusPolling<T>({
     const [resolvedIntervalMs, setResolvedIntervalMs] = React.useState<number | null>(
         intervalMs ?? null
     );
+    const [refreshSequence, setRefreshSequence] = React.useState(0);
     const onSuccessRef = React.useRef(onSuccess);
     const onErrorRef = React.useRef(onError);
     const hasResolvedRef = React.useRef(false);
@@ -71,7 +74,10 @@ export function useStatusPolling<T>({
     }, [onError]);
 
     React.useEffect(() => {
-        if (resolvedIntervalMs === null) return;
+        if (!enabled || resolvedIntervalMs === null) {
+            setIsCollecting(false);
+            return;
+        }
 
         let isActive = true;
         let isFetching = false;
@@ -116,7 +122,11 @@ export function useStatusPolling<T>({
             isActive = false;
             window.clearInterval(intervalId);
         };
-    }, [fetcher, fallback, resolvedIntervalMs, retainPreviousOnError]);
+    }, [enabled, fetcher, fallback, refreshSequence, resolvedIntervalMs, retainPreviousOnError]);
 
-    return { data, isCollecting, hasResolved };
+    const refresh = React.useCallback(() => {
+        setRefreshSequence((current) => current + 1);
+    }, []);
+
+    return { data, isCollecting, hasResolved, refresh };
 }

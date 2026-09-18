@@ -144,16 +144,28 @@ function previewGfsResourceStatus() {
             managed: "true",
           },
         ])),
-        glue_gfs_resources: hosts.map((host) => ({
-          id: "glue-gfs",
-          node_name: host,
-          role: "Started",
-          active: "true",
-          failed: "false",
-          blocked: "false",
-          maintenance: "false",
-          managed: "true",
-        })),
+        gfs_mount_resources: hosts.flatMap((host) => ([
+          {
+            id: "glue-gfs_res",
+            node_name: host,
+            role: "Started",
+            active: "true",
+            failed: "false",
+            blocked: "false",
+            maintenance: "false",
+            managed: "true",
+          },
+          {
+            id: "glue-gfs",
+            node_name: host,
+            role: "Started",
+            active: "true",
+            failed: "false",
+            blocked: "false",
+            maintenance: "false",
+            managed: "true",
+          },
+        ])),
       },
     },
   };
@@ -204,9 +216,10 @@ function previewCloudClusterStatus() {
       active: "true",
       blocked: "false",
       failed: "false",
-      nodes: hosts.map((host) => ({
+      nodes: hosts.map((host, index) => ({
         host,
         online: "true",
+        is_dc: index === 0 ? "true" : "false",
         resources_running: "true",
         standby: "false",
         maintenance: "false",
@@ -573,10 +586,73 @@ export function getPreviewCubeApiResponse<T>(
     return previewGfsResourceStatus() as T;
   case "/api/v1/cube/gfs/disk/status":
     return previewGfsDiskStatus() as T;
-  case "/api/v1/cube/pcs/control":
-    return previewCloudClusterStatus() as T;
+  case "/api/v1/cube/pcs/control": {
+    const body = typeof options.body === "object" && options.body
+      ? options.body as { action?: unknown; target?: unknown }
+      : {};
+    const action = String(body.action ?? "status");
+
+    if (action === "status") {
+      return previewCloudClusterStatus() as T;
+    }
+
+    return {
+      code: 200,
+      action,
+      target: String(body.target ?? "10.10.31.10"),
+      message: "preview ok",
+      val: "ok",
+    } as T;
+  }
+  case "/api/v1/cube/ccvm/lifecycle":
+    return {
+      code: 200,
+      message: "preview ok",
+      val: "cloud center lifecycle success",
+    } as T;
+  case "/api/v1/cube/license/apply":
+    return {
+      code: 200,
+      message: "license apply success",
+      results: [{ role: "ccvm", hostname: "ccvm", target: "10.10.31.10", code: 200, attempts: 1 }],
+    } as T;
+  case "/api/v1/cube/ccvm/bootstrap":
+    return {
+      code: 200,
+      role: "ccvm",
+      message: "ccvm_bootstrap success",
+    } as T;
+  case "/api/v1/cube/ccvm/monitoring/config":
+    return {
+      code: 200,
+      message: "preview ok",
+      val: "monitoring config update success",
+    } as T;
   case "/api/v1/cube/ccvm/status":
     return previewCloudVmStatus() as T;
+  case "/api/v1/cube/ccvm/edit":
+  case "/api/v1/cube/ccvm/secondary/resize":
+  case "/api/v1/cube/ccvm/service/control":
+  case "/api/v1/cube/db/dump":
+  case "/api/v1/cube/scvm/lifecycle":
+  case "/api/v1/cube/auto-shutdown":
+  case "/api/v1/cube/cluster/apply":
+  case "/api/v1/cube/cluster/apply-local":
+    return { code: 200, message: "preview ok", val: "ok" } as T;
+  case "/api/v1/cube/ccvm/snap": {
+    const body = typeof options.body === "object" && options.body
+      ? options.body as { action?: unknown }
+      : {};
+    const action = String(body.action ?? "list");
+    return {
+      code: 200,
+      action,
+      message: "preview ok",
+      val: action === "list"
+        ? [{ name: "2026-08-06-01:00:00" }, { name: "2026-08-05-01:00:00" }]
+        : "ok",
+    } as T;
+  }
   case "/api/v1/cube/gluecluster/status":
     return previewStorageClusterStatus() as T;
   case "/api/v1/cube/scvm/status":
@@ -617,7 +693,15 @@ export function getPreviewCubeApiResponse<T>(
       message: "preview ok",
       val: action === "configure-stonith"
         ? { configured: true, stonithEnabled: true }
-        : "ok",
+        : action === "check-host"
+          ? [
+              { hostname: "ablecube1", ablecube: "10.10.12.1" },
+              { hostname: "ablecube2", ablecube: "10.10.12.2" },
+              { hostname: "ablecube3", ablecube: "10.10.12.3" },
+            ]
+          : action === "list-gfs"
+            ? [{ vg_name: "vg_glue" }, { vg_name: "vg_glue_1" }]
+            : "ok",
       results: action === "configure-stonith"
         ? []
         : [
@@ -625,6 +709,26 @@ export function getPreviewCubeApiResponse<T>(
             { hostname: "ablecube2", target: "10.10.12.2", code: 200, message: "완료" },
             { hostname: "ablecube3", target: "10.10.12.3", code: 200, message: "완료" },
           ],
+    } as T;
+  }
+  case "/api/v1/cube/clvm/manage": {
+    const body = typeof options.body === "object" && options.body
+      ? options.body as { action?: unknown }
+      : {};
+    const action = String(body.action ?? "list-clvm");
+    return {
+      code: 200,
+      action,
+      message: "preview ok",
+      val: action === "list-clvm" ? [
+        {
+          vg_name: "vg_clvm01",
+          pv_name: "/dev/mapper/mpathb1",
+          pv_size: "500.00 GiB",
+          wwn: "3600d0230000000000e13955cc3757801",
+          disk_id: "/dev/mapper/mpathb",
+        },
+      ] : "ok",
     } as T;
   }
   case "/api/v1/cube/hba/manage":

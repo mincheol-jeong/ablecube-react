@@ -12,6 +12,8 @@ import GfsDiskStatus from "../cards/gfs-disk-status.tsx";
 import GfsResourceStatus from "../cards/gfs-resource-status.tsx";
 import StorageClusterStatus from "../cards/storage-cluster-status.tsx";
 import StorageVmStatus from "../cards/storage-vm-status.tsx";
+import ConfirmActionModal from "../components/common/ConfirmActionModal.tsx";
+import { bootstrapCCVM } from "../services/api/cloud-vm-deploy.ts";
 import {
     DEPLOY_STATUS_FALLBACK,
     fetchDeployUrl,
@@ -35,6 +37,12 @@ import SecurityPatchModal from "./security-patch-modal.tsx";
 
 import "./status.scss";
 
+type DeployClusterType =
+    | "ablestack-hci"
+    | "ablestack-vm"
+    | "ablestack-standalone"
+    | "ablestack-hci-filesystem";
+
 export default function StatusPage() {
     const [isClusterWizardOpen, setIsClusterWizardOpen] = React.useState(false);
     const [isStorageVmWizardOpen, setIsStorageVmWizardOpen] = React.useState(false);
@@ -48,6 +56,10 @@ export default function StatusPage() {
     const [isAblestackUpdateOpen, setIsAblestackUpdateOpen] = React.useState(false);
     const [isSecurityEvidenceOpen, setIsSecurityEvidenceOpen] = React.useState(false);
     const [isCloudResourceOpen, setIsCloudResourceOpen] = React.useState(false);
+    const [isCloudCenterConfigureOpen, setIsCloudCenterConfigureOpen] = React.useState(false);
+    const [isCloudCenterConfiguring, setIsCloudCenterConfiguring] = React.useState(false);
+    const [isCloudCenterConfigured, setIsCloudCenterConfigured] = React.useState(false);
+    const [cloudCenterConfigureError, setCloudCenterConfigureError] = React.useState("");
     const [deployStatus, setDeployStatus] = React.useState<DeployStatusData>(DEPLOY_STATUS_FALLBACK);
     const [actionNotice, setActionNotice] = React.useState("");
     const [statusRefreshKey, setStatusRefreshKey] = React.useState(0);
@@ -55,6 +67,16 @@ export default function StatusPage() {
     const refreshDeployOverview = React.useCallback(() => {
         setStatusRefreshKey((current) => current + 1);
     }, []);
+
+    const openAllInOneControl = React.useCallback(() => {
+        if (deployStatus.raw.licenseStatus.toLowerCase() !== "true") {
+            setActionNotice("라이센스 등록을 완료한 뒤 올인원 제어를 사용할 수 있습니다.");
+            setIsLicenseManagementOpen(true);
+            return;
+        }
+
+        setIsAllInOneControlOpen(true);
+    }, [deployStatus.raw.licenseStatus]);
 
     const openCenterUrl = async (option: DeployUrlOption, title: string) => {
         setActionNotice("");
@@ -77,6 +99,30 @@ export default function StatusPage() {
             setActionNotice(
                 error instanceof Error ? error.message : `${title} 주소 조회에 실패했습니다.`
             );
+        }
+    };
+
+    const closeCloudCenterConfigure = () => {
+        if (isCloudCenterConfiguring) return;
+        setIsCloudCenterConfigureOpen(false);
+        setIsCloudCenterConfigured(false);
+        setCloudCenterConfigureError("");
+    };
+
+    const configureCloudCenter = async () => {
+        setIsCloudCenterConfiguring(true);
+        setCloudCenterConfigureError("");
+
+        try {
+            await bootstrapCCVM();
+            setIsCloudCenterConfigured(true);
+            refreshDeployOverview();
+        } catch (error) {
+            setCloudCenterConfigureError(
+                error instanceof Error ? error.message : "클라우드센터 구성에 실패했습니다."
+            );
+        } finally {
+            setIsCloudCenterConfiguring(false);
         }
     };
 
@@ -106,8 +152,12 @@ export default function StatusPage() {
             openCenterUrl("storageCenter", "스토리지센터 연결");
             break;
         case "deploy_cloud_vm":
-        case "configure_cloud_vm":
             setIsCloudVmWizardOpen(true);
+            break;
+        case "configure_cloud_vm":
+            setCloudCenterConfigureError("");
+            setIsCloudCenterConfigured(false);
+            setIsCloudCenterConfigureOpen(true);
             break;
         case "configure_cloud_cluster":
         case "open_cloud_center":
@@ -123,7 +173,7 @@ export default function StatusPage() {
             openCenterUrl("wallCenter", "모니터링센터 연결");
             break;
         case "configure_local_storage":
-            setIsAllInOneControlOpen(true);
+            openAllInOneControl();
             break;
         case "run_security_patch":
             setIsSecurityPatchOpen(true);
@@ -158,28 +208,63 @@ export default function StatusPage() {
 
         const addGfsCards = () => {
             if (!usesGfs) return;
-            cards.push(<GfsResourceStatus key="gfs-resource" />);
-            cards.push(<GfsDiskStatus key="gfs-disk" />);
+            cards.push(
+                <GfsResourceStatus
+                  key="gfs-resource"
+                  pollingEnabled={deployStatus.polling.gfsResource.enabled}
+                />
+            );
+            cards.push(<GfsDiskStatus key="gfs-disk" pollingEnabled={deployStatus.polling.gfsDisk.enabled} />);
         };
 
         if (osType === "ablestack-vm") {
-            cards.push(<GfsResourceStatus key="gfs-resource" />);
-            cards.push(<CloudClusterStatus key="cloud-cluster" />);
-            cards.push(<GfsDiskStatus key="gfs-disk" />);
-            cards.push(<CloudVmStatus key="cloud-vm" />);
+            cards.push(
+                <GfsResourceStatus
+                  key="gfs-resource"
+                  pollingEnabled={deployStatus.polling.gfsResource.enabled}
+                />
+            );
+            cards.push(
+                <CloudClusterStatus
+                  key="cloud-cluster"
+                  pollingEnabled={deployStatus.polling.cloudCluster.enabled}
+                />
+            );
+            cards.push(<GfsDiskStatus key="gfs-disk" pollingEnabled={deployStatus.polling.gfsDisk.enabled} />);
+            cards.push(<CloudVmStatus key="cloud-vm" pollingEnabled={deployStatus.polling.cloudVm.enabled} />);
         } else if (osType === "ablestack-standalone") {
-            cards.push(<CloudVmStatus key="cloud-vm" />);
+            cards.push(<CloudVmStatus key="cloud-vm" pollingEnabled={deployStatus.polling.cloudVm.enabled} />);
         } else if (osType === "ablestack-hci-filesystem") {
-            cards.push(<StorageClusterStatus key="storage-cluster" />);
-            cards.push(<CloudClusterStatus key="cloud-cluster" />);
-            cards.push(<StorageVmStatus key="storage-vm" />);
-            cards.push(<CloudVmStatus key="cloud-vm" />);
+            cards.push(
+                <StorageClusterStatus
+                  key="storage-cluster"
+                  pollingEnabled={deployStatus.polling.storageCluster.enabled}
+                />
+            );
+            cards.push(
+                <CloudClusterStatus
+                  key="cloud-cluster"
+                  pollingEnabled={deployStatus.polling.cloudCluster.enabled}
+                />
+            );
+            cards.push(<StorageVmStatus key="storage-vm" pollingEnabled={deployStatus.polling.storageVm.enabled} />);
+            cards.push(<CloudVmStatus key="cloud-vm" pollingEnabled={deployStatus.polling.cloudVm.enabled} />);
             addGfsCards();
         } else {
-            cards.push(<StorageClusterStatus key="storage-cluster" />);
-            cards.push(<CloudClusterStatus key="cloud-cluster" />);
-            cards.push(<StorageVmStatus key="storage-vm" />);
-            cards.push(<CloudVmStatus key="cloud-vm" />);
+            cards.push(
+                <StorageClusterStatus
+                  key="storage-cluster"
+                  pollingEnabled={deployStatus.polling.storageCluster.enabled}
+                />
+            );
+            cards.push(
+                <CloudClusterStatus
+                  key="cloud-cluster"
+                  pollingEnabled={deployStatus.polling.cloudCluster.enabled}
+                />
+            );
+            cards.push(<StorageVmStatus key="storage-vm" pollingEnabled={deployStatus.polling.storageVm.enabled} />);
+            cards.push(<CloudVmStatus key="cloud-vm" pollingEnabled={deployStatus.polling.cloudVm.enabled} />);
         }
 
         if (cards.length === 0) {
@@ -213,7 +298,7 @@ export default function StatusPage() {
                   key={`deploy-overview-${statusRefreshKey}`}
                   mode="ribbon"
                   onAction={handleDeployAction}
-                  onOpenDeployRun={() => setIsAllInOneControlOpen(true)}
+                  onOpenDeployRun={openAllInOneControl}
                   onStatusChange={setDeployStatus}
                 />
             </PageSection>
@@ -243,11 +328,30 @@ export default function StatusPage() {
             <CloudVmDeployWizardModal
               isOpen={isCloudVmWizardOpen}
               onClose={() => setIsCloudVmWizardOpen(false)}
+              onCompleted={refreshDeployOverview}
+              clusterType={deployStatus.osType as DeployClusterType}
+            />
+
+            <ConfirmActionModal
+              isOpen={isCloudCenterConfigureOpen}
+              title="클라우드센터 구성"
+              message={isCloudCenterConfiguring
+                  ? "Mold 데이터베이스와 서비스, System VM 템플릿을 구성하고 있습니다. 환경에 따라 수 분 이상 걸릴 수 있습니다."
+                  : "클라우드센터를 구성하시겠습니까?"}
+              confirmLabel="구성"
+              isSubmitting={isCloudCenterConfiguring}
+              isCompleted={isCloudCenterConfigured}
+              completedMessage="클라우드센터 구성이 완료되었습니다."
+              errorMessage={cloudCenterConfigureError}
+              onClose={closeCloudCenterConfigure}
+              onConfirm={configureCloudCenter}
             />
 
             <MonitoringCenterWizardModal
               isOpen={isMonitoringWizardOpen}
               onClose={() => setIsMonitoringWizardOpen(false)}
+              onCompleted={refreshDeployOverview}
+              clusterType={deployStatus.osType as DeployClusterType}
             />
 
             <GfsStorageConfigureWizardModal
@@ -277,8 +381,7 @@ export default function StatusPage() {
             <SecurityPatchModal
               isOpen={isSecurityPatchOpen}
               onClose={() => setIsSecurityPatchOpen(false)}
-              onCompleted={(message) => {
-                  setActionNotice(message);
+              onCompleted={() => {
                   refreshDeployOverview();
               }}
             />
@@ -287,6 +390,7 @@ export default function StatusPage() {
               isOpen={isSecurityEvidenceOpen}
               onClose={() => setIsSecurityEvidenceOpen(false)}
               onCompleted={setActionNotice}
+              clusterType={deployStatus.osType as DeployClusterType}
             />
 
             <AblestackUpdateModal

@@ -85,6 +85,17 @@
   margin-top: 0;
 }
 
+.ct-cloud-vm-wizard__sensitivity-field {
+  inline-size: 6rem;
+  max-inline-size: 100%;
+  justify-self: start;
+}
+
+.ct-cloud-vm-wizard__sensitivity-field .ct-cloud-vm-wizard__sensitivity-input {
+  inline-size: 100% !important;
+  max-inline-size: 100% !important;
+}
+
 .ct-cloud-vm-wizard__table-wrap {
   margin-top: 16px;
   padding-left: 12px;

@@ -474,6 +474,50 @@
   box-shadow: 0 4px 12px rgb(15 23 42 / 4%);
 }
 
+div.ct-wizard-status-row {
+  min-block-size: 44px;
+  padding-block: 12px;
+  padding-inline: 14px;
+  border: 1px solid #d8dadd;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f1f1f;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.ct-wizard-status-row.ct-wizard-status-row--running {
+  border-color: #73bcf7;
+  background: #f5f9ff;
+}
+
+.ct-wizard-status-row.ct-wizard-status-row--succeeded {
+  border-color: #95d58e;
+  background: #f4fbf1;
+}
+
+.ct-wizard-status-row.ct-wizard-status-row--failed {
+  border-color: #f4b1b2;
+  background: #fdf2f2;
+}
+
+.ct-wizard-status-label {
+  min-inline-size: 64px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ct-wizard-status-label .pf-v6-c-label__content {
+  inline-size: 100%;
+  justify-content: center;
+}
+
+.ct-wizard-status-row__text {
+  color: #1f1f1f;
+  font-weight: 700;
+}
+
 .ct-gfs-storage-wizard__disk-list,
 .ct-gfs-storage-wizard__sync-result {
   border-color: #dbeafe;

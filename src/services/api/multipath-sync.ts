@@ -183,17 +183,16 @@ export function formatMultipathSyncAction(action: MultipathSyncAction): string {
   return action === "sync" ? "외부 스토리지 동기화" : "외부 스토리지 재검색";
 }
 
-export function summarizeMultipathSyncResult(
-  result: MultipathSyncResult,
-  fallbackMessage: string
-): string {
-  if (result.results.length === 0) {
-    return result.message || fallbackMessage;
-  }
+export function formatMultipathSyncProgressMessage(action: MultipathSyncAction): string {
+  return action === "sync"
+    ? "외부 스토리지를 동기화하고 있습니다."
+    : "외부 스토리지 장치를 다시 검색하고 있습니다.";
+}
 
-  const successCount = result.results.filter((target) => target.code === 200).length;
-
-  return `${fallbackMessage} (성공 ${successCount}/${result.results.length})`;
+export function formatMultipathSyncCompletedMessage(action: MultipathSyncAction): string {
+  return action === "sync"
+    ? "외부 스토리지 동기화가 완료되었습니다."
+    : "외부 스토리지 재검색이 완료되었습니다.";
 }
 
 export async function runMultipathSync(action: MultipathSyncAction): Promise<MultipathSyncResult> {

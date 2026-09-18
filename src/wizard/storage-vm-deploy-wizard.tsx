@@ -17,8 +17,6 @@ import {
   FormSelect,
   FormSelectOption,
   Button,
-  Label,
-  Spinner,
   DescriptionList,
   DescriptionListGroup,
   DescriptionListTerm,
@@ -28,9 +26,15 @@ import {
 import { InfoCircleIcon } from "@patternfly/react-icons";
 
 import ValidationErrorModal from "../components/common/ValidationErrorModal";
+import WizardStepStatusLabel, { wizardStatusRowClass } from "../components/common/WizardStepStatus";
 import { fetchClusterConfigProfile } from "../services/api/cluster-config";
 import { fetchNicInventory, fetchStorageVmDiskInventory } from "../services/api/inventory";
 import { fetchCurrentHostname } from "../services/host";
+import {
+	fetchDeployRunJobs,
+	startDeployRun,
+	type DeployRunJob,
+} from "../services/api/deploy-status";
 import "./storage-vm-deploy-wizard.scss";
 import {
   duplicateMessage,
@@ -128,6 +132,7 @@ export default function StorageVmDeployWizardModal({
   const [currentHostname, setCurrentHostname] = React.useState("");
   const [clusterConfigLoadError, setClusterConfigLoadError] = React.useState("");
   const [clusterConfigLoaded, setClusterConfigLoaded] = React.useState(false);
+	const [isAdditionalHost, setIsAdditionalHost] = React.useState(false);
 
   const [scvmHostname, setScvmHostname] = React.useState("");
   const [mgmtIp, setMgmtIp] = React.useState(""); // 10.10.1.11/16
@@ -146,6 +151,9 @@ export default function StorageVmDeployWizardModal({
   const [showCancelConfirm, setShowCancelConfirm] = React.useState(false);
   const [isDeployStarted, setIsDeployStarted] = React.useState(false);
   const [isDeployFinished, setIsDeployFinished] = React.useState(false);
+	const [deployJob, setDeployJob] = React.useState<DeployRunJob | null>(null);
+	const [deployJobId, setDeployJobId] = React.useState("");
+	const [deployError, setDeployError] = React.useState("");
   const [validationMessage, setValidationMessage] = React.useState("");
   const deployNextStepRef = React.useRef<(() => void) | null>(null);
 
@@ -180,6 +188,7 @@ export default function StorageVmDeployWizardModal({
     setCurrentHostname("");
     setClusterConfigLoadError("");
     setClusterConfigLoaded(false);
+	setIsAdditionalHost(false);
     setScvmHostname("");
     setMgmtIp(""); // 10.10.1.11/16
     setMgmtGateway("");
@@ -193,6 +202,9 @@ export default function StorageVmDeployWizardModal({
     setShowCancelConfirm(false);
     setIsDeployStarted(false);
     setIsDeployFinished(false);
+	setDeployJob(null);
+	setDeployJobId("");
+	setDeployError("");
     setValidationMessage("");
     fetchCurrentHostname()
       .then(applyCurrentHostname)
@@ -205,6 +217,10 @@ export default function StorageVmDeployWizardModal({
   };
 
   const requestClose = () => {
+    if (isDeployFinished) {
+      handleClose();
+      return;
+    }
     setShowCancelConfirm(true);
   };
 
@@ -315,7 +331,7 @@ export default function StorageVmDeployWizardModal({
           setHosts(profileHosts);
           setHostCount(Math.max(3, profileHosts.length));
         }
-        const currentProfileHost = profile.hosts.find((host) => host.hostname === currentHostname) ?? profile.hosts[0];
+		const currentProfileHost = profile.hosts.find((host) => host.hostname === currentHostname) ?? profile.hosts[0];
         if (currentProfileHost) {
           setScvmHostname(`scvm${currentProfileHost.index || "1"}`);
           setMgmtIp(withCidr(currentProfileHost.scvmMngt, profile.managementCidr));
@@ -327,6 +343,12 @@ export default function StorageVmDeployWizardModal({
         if (profile.ccvmIp) {
           setCcvmMgmtIp(profile.ccvmIp);
         }
+		const latestHost = profile.hosts[profile.hosts.length - 1];
+		setIsAdditionalHost(
+			profile.hostType.toLowerCase() === "add"
+			&& Boolean(currentProfileHost?.hostname)
+			&& currentProfileHost?.hostname === latestHost?.hostname
+		);
         setClusterConfigLoaded(profileHosts.length > 0);
       })
       .catch((error) => {
@@ -530,7 +552,46 @@ export default function StorageVmDeployWizardModal({
     return "";
   };
 
-  const executeMockDeploy = () => {
+	const buildSCVMDeployPayload = () => {
+		const hostKey = currentHostname || scvmHostname;
+		const xmlRequest = {
+			cpu: Number(cpu),
+			memory: Number(memory),
+			disk_type: diskMode === "rp" ? "raid_passthrough" : "lun_passthrough",
+			...(diskMode === "rp"
+				? { raid_passthrough_list: selectedDisks }
+				: { lun_passthrough_list: selectedDisks }),
+			management_network_bridge: mgmtBridge,
+			storage_traffic_network_type: storageTrafficMode === "np"
+				? "nic_passthrough"
+				: storageTrafficMode === "npb"
+					? "nic_passthrough_bonding"
+					: "bridge",
+			...(storageTrafficMode === "np" ? {
+				server_nic_passthrough: storageNic1,
+				replication_nic_passthrough: replicaNic1,
+			} : {}),
+			...(storageTrafficMode === "npb" ? {
+				server_nic_passthrough_bonding_list: [storageNic1, storageNic2],
+				replication_nic_passthrough_bonding_list: [replicaNic1, replicaNic2],
+			} : {}),
+			...(storageTrafficMode === "bn" ? {
+				server_network_bridge: storageBridge,
+				replication_network_bridge: replicaBridge,
+			} : {}),
+		};
+
+		return {
+			mode: "partial",
+			only: isAdditionalHost ? ["scvm_prepare", "scvm_bootstrap"] : ["scvm_prepare"],
+			target_hostnames: [hostKey],
+			join_existing_scvm_cluster: isAdditionalHost,
+			update_system_profile: !isAdditionalHost,
+			scvm_by_host: { [hostKey]: xmlRequest },
+		};
+	};
+
+	const executeDeploy = async () => {
     const errorMessage = validateStorageVmDeploy();
     if (errorMessage) {
       setValidationMessage(errorMessage);
@@ -541,8 +602,46 @@ export default function StorageVmDeployWizardModal({
     setValidationMessage("");
     setShowDeployConfirm(false);
     setIsDeployStarted(true);
-    deployNextStepRef.current?.();
+	setIsDeployFinished(false);
+	setDeployError("");
+	setDeployJob(null);
+	setDeployJobId("");
+	deployNextStepRef.current?.();
+
+	try {
+		const job = await startDeployRun(buildSCVMDeployPayload());
+		setDeployJob(job);
+		setDeployJobId(job.jobId);
+		if (job.status === "succeeded") setIsDeployFinished(true);
+		if (job.status === "failed") setDeployError(job.message || "SCVM 배포 Job이 실패했습니다.");
+	} catch (error) {
+		setDeployError(error instanceof Error ? error.message : String(error));
+	}
   };
+
+	React.useEffect(() => {
+		if (!deployJobId || isDeployFinished || deployError) return undefined;
+		let disposed = false;
+		const timer = window.setInterval(() => {
+			fetchDeployRunJobs().then((jobs) => {
+				if (disposed) return;
+				const job = jobs.find((item) => item.jobId === deployJobId);
+				if (!job) return;
+				setDeployJob(job);
+				if (job.status === "succeeded") setIsDeployFinished(true);
+				if (job.status === "failed") setDeployError(job.message || "SCVM 배포 Job이 실패했습니다.");
+			}).catch((error) => {
+				if (!disposed) setDeployError(error instanceof Error ? error.message : String(error));
+			});
+		}, 2000);
+		return () => {
+			disposed = true;
+			window.clearInterval(timer);
+		};
+	}, [deployError, deployJobId, isDeployFinished]);
+
+	const deployStepStatus = (name: string) => deployJob?.steps.find((step) => step.name === name)?.status
+		|| (deployError ? "failed" : isDeployStarted ? "running" : "pending");
 
   const wizardFooter = (
     activeStep: any,
@@ -568,7 +667,7 @@ export default function StorageVmDeployWizardModal({
                 return;
               }
               if (isDeploy) {
-                setIsDeployFinished(true);
+				if (!isDeployFinished) return;
                 goToNextStep();
                 return;
               }
@@ -598,7 +697,7 @@ export default function StorageVmDeployWizardModal({
           </Button>
         )}
         {isFinish && (
-          <Button variant="primary" onClick={close}>
+          <Button variant="primary" onClick={handleClose}>
             닫기
           </Button>
         )}
@@ -1316,26 +1415,33 @@ export default function StorageVmDeployWizardModal({
               </Content>
             </Content>
 	            <div className="ct-storage-vm-wizard__status-list">
-	              <div>
-	                <Label color="green" variant="outline">완료</Label>
-	                <span>스토리지센터 가상머신 초기화 작업</span>
+			  <div className={wizardStatusRowClass(deployStepStatus("scvm_prepare"))}>
+				<WizardStepStatusLabel status={deployStepStatus("scvm_prepare")} />
+				<span className="ct-wizard-status-row__text">스토리지센터 가상머신 초기화 작업</span>
               </div>
-              <div>
-                <Label color="green" variant="outline">완료</Label>
-                <span>cloudinit iso 파일 생성</span>
+			  <div className={wizardStatusRowClass(deployStepStatus("scvm_prepare"))}>
+				<WizardStepStatusLabel status={deployStepStatus("scvm_prepare")} />
+                <span className="ct-wizard-status-row__text">cloudinit iso 파일 생성</span>
               </div>
-              <div>
-                <Label color="green" variant="outline">완료</Label>
-                <span>스토리지센터 가상머신 구성</span>
-	              </div>
-	              <div>
-	                <Label color={isDeployStarted ? "orange" : "blue"} variant="outline">
-	                  {isDeployStarted ? "진행중" : "준비중"}
-	                </Label>
-	                {isDeployStarted && <Spinner size="sm" />}
-	                <span>스토리지센터 가상머신 배포</span>
-	              </div>
-	            </div>
+			  <div className={wizardStatusRowClass(deployStepStatus("scvm_prepare"))}>
+				<WizardStepStatusLabel status={deployStepStatus("scvm_prepare")} />
+                <span className="ct-wizard-status-row__text">스토리지센터 가상머신 구성</span>
+			  </div>
+			  <div className={wizardStatusRowClass(deployStepStatus("scvm_prepare"))}>
+				<WizardStepStatusLabel
+				  status={deployStepStatus("scvm_prepare")}
+				  ariaLabel="스토리지센터 가상머신 배포 진행 중"
+				/>
+				<span className="ct-wizard-status-row__text">스토리지센터 가상머신 배포</span>
+			  </div>
+			  {isAdditionalHost && (
+				<div className={wizardStatusRowClass(deployStepStatus("scvm_bootstrap"))}>
+				  <WizardStepStatusLabel status={deployStepStatus("scvm_bootstrap")} />
+				  <span className="ct-wizard-status-row__text">SCVM API 상태 확인(20초 간격, 최대 5회) 및 Glue 클러스터 추가</span>
+				</div>
+			  )}
+			</div>
+			{deployError && <Alert isInline variant="danger" title="SCVM 배포 실패">{deployError}</Alert>}
           </div>
         </WizardStep>
 
@@ -1352,7 +1458,9 @@ export default function StorageVmDeployWizardModal({
                 <Content component="li">스토리지센터에 접속하여 스토리지 클러스터를 구성하십시오.</Content>
               </Content>
               <Content component="p">
-                추가 호스트 SCVM인 경우 Glue 대시보드에 접속하여 SCVM 추가 작업을 진행 해주세요.
+				{isAdditionalHost
+				  ? "신규 SCVM이 기존 Glue 클러스터에 추가되었습니다."
+				  : "초기 SCVM 배포가 완료되었습니다. 스토리지센터 구성 단계에서 Glue 클러스터를 구성하십시오."}
               </Content>
               <Content component="p">마법사를 종료하려면 화면 상단의 닫기 버튼을 클릭하십시오.</Content>
             </Content>
@@ -1371,7 +1479,7 @@ export default function StorageVmDeployWizardModal({
         <Content component="p">스토리지센터 가상머신 배포를 진행하시겠습니까?</Content>
       </ModalBody>
       <ModalFooter>
-        <Button variant="primary" onClick={executeMockDeploy}>
+		<Button variant="primary" onClick={executeDeploy}>
           실행
         </Button>
         <Button variant="link" onClick={() => setShowDeployConfirm(false)}>

@@ -12,6 +12,7 @@ export interface ClusterConfigHost {
 
 export interface ClusterConfigProfile {
   type: string;
+	hostType: string;
   ccvmIp: string;
   managementCidr: string;
   managementGateway: string;
@@ -85,6 +86,7 @@ export async function fetchClusterConfigProfile(): Promise<ClusterConfigProfile>
 
   return {
     type: readString(config, ["type"]),
+	hostType: readString(config, ["hostType", "host_type"]),
     ccvmIp: readString(ccvm, ["ip"]),
     managementCidr: readString(mngtNic, ["cidr"]),
     managementGateway: readString(mngtNic, ["gw", "gateway"]),

@@ -2,6 +2,7 @@
 import React from "react";
 import {
   Button,
+  ClipboardCopy,
   Content,
   Modal,
   ModalBody,
@@ -9,51 +10,37 @@ import {
   ModalHeader,
 } from "@patternfly/react-core";
 import { ExclamationTriangleIcon } from "@patternfly/react-icons";
+import type { DiskInventoryOption } from "../services/api/inventory";
 
 export type GfsDiskAction = "add" | "delete" | "extend" | "info";
+
+export interface GfsDiskRow {
+  id: string;
+  name: string;
+  mount: string;
+  pv: string;
+  vg: string;
+  lv: string;
+  size: string;
+  uuid: string;
+  disks: string[];
+}
+
+export interface GfsDiskActionOptions {
+  extendMethod: "resize" | "add-lun";
+  nonStop: boolean;
+  addDisks: string[];
+}
 
 interface GfsDiskActionModalProps {
   action: GfsDiskAction | null;
   isOpen: boolean;
+  availableDisks?: DiskInventoryOption[];
+  gfsDisks?: GfsDiskRow[];
+  isLoading?: boolean;
   onClose: () => void;
-  onConfirm: (action: Exclude<GfsDiskAction, "info">, selectedIds: string[]) => void;
+  onConfirm: (action: Exclude<GfsDiskAction, "info">, selectedIds: string[], options: GfsDiskActionOptions) => void;
 }
-
-const AVAILABLE_DISKS = [
-  {
-    id: "disk-image-001",
-    name: "disk-image-001",
-    device: "/dev/mapper/mpathg",
-    size: "500G",
-    type: "mpath",
-  },
-  {
-    id: "disk-image-002",
-    name: "disk-image-002",
-    device: "/dev/mapper/mpathh",
-    size: "1T",
-    type: "mpath",
-  },
-];
-
-const GFS_DISKS = [
-  {
-    id: "gfs-data-01",
-    name: "gfs-data-01",
-    mount: "/mnt/glue-gfs",
-    pv: "/dev/mapper/mpathg",
-    vg: "vg_gfs01",
-    size: "500G",
-  },
-  {
-    id: "gfs-data-02",
-    name: "gfs-data-02",
-    mount: "/mnt/glue-gfs2",
-    pv: "/dev/mapper/mpathh",
-    vg: "vg_gfs02",
-    size: "1T",
-  },
-];
 
 const ACTION_TITLE: Record<GfsDiskAction, string> = {
   add: "GFS 디스크 추가",
@@ -68,21 +55,51 @@ const toggleSelection = (values: string[], value: string) => (
     : [...values, value]
 );
 
+function normalizeByIdPath(value: string, isMultipath: boolean): string {
+  const normalized = value.trim();
+
+  if (!normalized || normalized.toUpperCase() === "N/A") {
+    return "";
+  }
+
+  if (normalized.startsWith("/dev/disk/by-id/")) {
+    return normalized;
+  }
+
+  const identifier = normalized
+    .replace(/^.*\/dev\/disk\/by-id\//, "")
+    .replace(/^dm-uuid-(?:part\d+-)?mpath-/, "")
+    .replace(/-part\d+$/, "");
+
+  if (/^(?:dm-uuid-|wwn-|scsi-)/.test(identifier)) {
+    return `/dev/disk/by-id/${identifier}`;
+  }
+
+  return isMultipath
+    ? `/dev/disk/by-id/dm-uuid-mpath-${identifier}`
+    : `/dev/disk/by-id/${identifier}`;
+}
+
 export default function GfsDiskActionModal({
   action,
   isOpen,
+  availableDisks = [],
+  gfsDisks = [],
+  isLoading = false,
   onClose,
   onConfirm,
 }: GfsDiskActionModalProps) {
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
   const [extendMethod, setExtendMethod] = React.useState("resize");
   const [isNoDowntime, setIsNoDowntime] = React.useState(false);
+  const [selectedExtendDisks, setSelectedExtendDisks] = React.useState<string[]>([]);
 
   React.useEffect(() => {
     if (!isOpen) {
       setSelectedIds([]);
       setExtendMethod("resize");
       setIsNoDowntime(false);
+      setSelectedExtendDisks([]);
     }
   }, [isOpen]);
 
@@ -93,39 +110,54 @@ export default function GfsDiskActionModal({
   const isInfo = action === "info";
   const isAdd = action === "add";
   const isExtend = action === "extend";
-  const isExecutable = isInfo || selectedIds.length > 0;
+  const isExecutable = isInfo || (
+    selectedIds.length > 0 && (!isExtend || extendMethod === "resize" || selectedExtendDisks.length > 0)
+  );
   const execute = () => {
     if (isInfo) {
       onClose();
       return;
     }
 
-    onConfirm(action, selectedIds);
+    onConfirm(action, selectedIds, {
+      extendMethod: extendMethod as "resize" | "add-lun",
+      nonStop: isNoDowntime,
+      addDisks: selectedExtendDisks,
+    });
   };
 
   const renderAvailableDiskTable = () => (
     <div className="ct-disk-table-wrap">
-      {AVAILABLE_DISKS.length > 0 ? (
-        <table className="ct-disk-table">
+      {availableDisks.length > 0 ? (
+        <table className="ct-disk-table ct-disk-table--nowrap">
           <thead>
             <tr>
               <th aria-label="선택" />
               <th>디스크 이름</th>
               <th>디스크 장치명</th>
+              <th>UUID</th>
               <th>사이즈</th>
               <th>유형</th>
             </tr>
           </thead>
           <tbody>
-            {AVAILABLE_DISKS.map((disk) => {
-              const isSelected = selectedIds.includes(disk.id);
+            {availableDisks.map((disk) => {
+              const selection = isExtend ? selectedExtendDisks : selectedIds;
+              const isSelected = selection.includes(disk.value);
               const toggleDisk = () => {
-                setSelectedIds((values) => toggleSelection(values, disk.id));
+                if (disk.inUse) return;
+                if (isExtend) {
+                  setSelectedExtendDisks((values) => toggleSelection(values, disk.value));
+                } else {
+                  setSelectedIds((values) => toggleSelection(values, disk.value));
+                }
               };
 
               return (
                 <tr
-                  className={isSelected ? "ct-disk-table__row--selected" : ""}
+                  className={disk.inUse
+                    ? "ct-disk-table__row--disabled"
+                    : isSelected ? "ct-disk-table__row--selected" : ""}
                   key={disk.id}
                   onClick={toggleDisk}
                 >
@@ -134,29 +166,35 @@ export default function GfsDiskActionModal({
                       type="checkbox"
                       aria-label={`${disk.name} 선택`}
                       checked={isSelected}
+                      disabled={disk.inUse}
                       onClick={(event) => event.stopPropagation()}
                       onChange={toggleDisk}
                     />
                   </td>
                   <td><span className="ct-disk-table__name">{disk.name}</span></td>
                   <td className="ct-disk-table__mono">{disk.device}</td>
+                  <td className="ct-disk-table__mono">{disk.uuid || "N/A"}</td>
                   <td className="ct-disk-table__mono">{disk.size}</td>
-                  <td><span className="ct-disk-table__status">{disk.type}</span></td>
+                  <td>
+                    <span className="ct-disk-table__status">
+                      {disk.inUse ? "사용 중 (파티션 존재)" : disk.type}
+                    </span>
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       ) : (
-        <Content component="p">데이터가 존재하지 않습니다.</Content>
+        <Content component="p">{isLoading ? "디스크 목록을 조회하고 있습니다." : "추가 가능한 디스크가 없습니다."}</Content>
       )}
     </div>
   );
 
   const renderGfsDiskTable = () => (
     <div className="ct-disk-table-wrap">
-      {GFS_DISKS.length > 0 ? (
-        <table className="ct-disk-table">
+      {gfsDisks.length > 0 ? (
+        <table className="ct-disk-table ct-disk-table--nowrap">
           <thead>
             <tr>
               <th aria-label="선택" />
@@ -164,14 +202,19 @@ export default function GfsDiskActionModal({
               <th>마운트 경로</th>
               <th>디스크 장치명</th>
               <th>볼륨 그룹</th>
+              <th>UUID</th>
               <th>사이즈</th>
             </tr>
           </thead>
           <tbody>
-            {GFS_DISKS.map((disk) => {
+            {gfsDisks.map((disk) => {
               const isSelected = selectedIds.includes(disk.id);
               const toggleDisk = () => {
-                setSelectedIds((values) => toggleSelection(values, disk.id));
+                setSelectedIds((values) => (
+                  action === "delete" || action === "extend"
+                    ? (values.includes(disk.id) ? [] : [disk.id])
+                    : toggleSelection(values, disk.id)
+                ));
               };
 
               return (
@@ -193,6 +236,7 @@ export default function GfsDiskActionModal({
                   <td className="ct-disk-table__mono">{disk.mount}</td>
                   <td className="ct-disk-table__mono">{disk.pv}</td>
                   <td className="ct-disk-table__mono">{disk.vg}</td>
+                  <td className="ct-disk-table__mono">{disk.uuid || "N/A"}</td>
                   <td className="ct-disk-table__mono">{disk.size}</td>
                 </tr>
               );
@@ -200,22 +244,63 @@ export default function GfsDiskActionModal({
           </tbody>
         </table>
       ) : (
-        <Content component="p">데이터가 존재하지 않습니다.</Content>
+        <Content component="p">{isLoading ? "GFS 목록을 조회하고 있습니다." : "구성된 GFS 디스크가 없습니다."}</Content>
       )}
     </div>
   );
 
   const renderInfo = () => (
-    <div className="ct-action-confirm-modal__body">
-      {GFS_DISKS.map((disk) => (
-        <div className="ct-gfs-disk-info" key={disk.id}>
-          <div><strong>디스크 마운트 상태</strong> Health OK</div>
-          <div><strong>마운트 경로</strong> {disk.mount}</div>
-          <div><strong>물리 볼륨</strong> {disk.pv}</div>
-          <div><strong>볼륨 그룹</strong> {disk.vg}</div>
-          <div><strong>디스크 크기</strong> {disk.size}</div>
-        </div>
-      ))}
+    <div className="ct-disk-table-wrap">
+      {availableDisks.length > 0 ? (
+        <table className="ct-disk-table ct-disk-table--static ct-disk-table--nowrap">
+          <thead>
+            <tr>
+              <th>디스크 이름</th>
+              <th>디스크 장치명</th>
+              <th>UUID</th>
+              <th>사이즈</th>
+              <th>유형</th>
+            </tr>
+          </thead>
+          <tbody>
+            {availableDisks.map((disk) => {
+              const isMultipath = disk.pathMode.toLowerCase() === "multipath";
+              const uuidPath = normalizeByIdPath(disk.deviceId || disk.uuid, isMultipath);
+
+              return (
+                <tr key={disk.id}>
+                  <td><span className="ct-disk-table__name">{disk.name}</span></td>
+                  <td className="ct-disk-table__mono">{disk.device}</td>
+                  <td>
+                    {uuidPath ? (
+                      <ClipboardCopy
+                        className="ct-disk-table__copy"
+                        variant="inline-compact"
+                        isReadOnly
+                        hoverTip="UUID 경로 복사"
+                        clickTip="복사되었습니다"
+                        copyAriaLabel={`${uuidPath} 복사`}
+                      >
+                        {uuidPath}
+                      </ClipboardCopy>
+                    ) : (
+                      <span className="ct-disk-table__mono">N/A</span>
+                    )}
+                  </td>
+                  <td className="ct-disk-table__mono">{disk.size}</td>
+                  <td>
+                    <span className="ct-disk-table__status">
+                      {isMultipath ? "Multipath" : "Single path"}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : (
+        <Content component="p">{isLoading ? "디스크 목록을 조회하고 있습니다." : "조회된 디스크가 없습니다."}</Content>
+      )}
     </div>
   );
 
@@ -223,9 +308,9 @@ export default function GfsDiskActionModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      variant={isAdd ? "large" : "medium"}
+      variant="large"
       aria-label={ACTION_TITLE[action]}
-      className={`ct-clvm-disk-modal ${isAdd ? "ct-clvm-disk-modal--large" : "ct-clvm-disk-modal--medium"}`}
+      className="ct-clvm-disk-modal ct-clvm-disk-modal--large ct-gfs-disk-action-modal"
     >
       <ModalHeader title={ACTION_TITLE[action]} />
       <ModalBody>
@@ -273,6 +358,7 @@ export default function GfsDiskActionModal({
           </div>
         )}
         {isInfo ? renderInfo() : isAdd ? renderAvailableDiskTable() : renderGfsDiskTable()}
+        {isExtend && extendMethod === "add-lun" ? renderAvailableDiskTable() : null}
       </ModalBody>
       <ModalFooter>
         <Button variant="primary" isDisabled={!isExecutable} onClick={execute}>

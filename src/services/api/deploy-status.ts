@@ -22,6 +22,21 @@ export interface DeployStatusWarning {
   message: string;
 }
 
+export interface DeployPollingTarget {
+  enabled: boolean;
+  reason: string;
+}
+
+export interface DeployPollingPolicy {
+  storageVm: DeployPollingTarget;
+  storageCluster: DeployPollingTarget;
+  gfsResource: DeployPollingTarget;
+  gfsDisk: DeployPollingTarget;
+  cloudVm: DeployPollingTarget;
+  cloudCluster: DeployPollingTarget;
+  mold: DeployPollingTarget;
+}
+
 export interface DeployStatusData {
   osType: string;
   stage: string;
@@ -31,7 +46,23 @@ export interface DeployStatusData {
   availableActions: string[];
   warnings: DeployStatusWarning[];
   raw: DeployStatusRaw;
+  polling: DeployPollingPolicy;
   checkedAt: string;
+}
+
+interface DeployPollingTargetResponse {
+  enabled?: boolean;
+  reason?: string;
+}
+
+interface DeployPollingPolicyResponse {
+  storage_vm?: DeployPollingTargetResponse;
+  storage_cluster?: DeployPollingTargetResponse;
+  gfs_resource?: DeployPollingTargetResponse;
+  gfs_disk?: DeployPollingTargetResponse;
+  cloud_vm?: DeployPollingTargetResponse;
+  cloud_cluster?: DeployPollingTargetResponse;
+  mold?: DeployPollingTargetResponse;
 }
 
 interface DeployStatusRawResponse {
@@ -61,6 +92,7 @@ interface DeployStatusDataResponse {
     message?: string;
   }>;
   raw?: DeployStatusRawResponse;
+  polling?: DeployPollingPolicyResponse;
   checked_at?: string;
 }
 
@@ -159,6 +191,15 @@ export const DEPLOY_STATUS_FALLBACK: DeployStatusData = {
         localConfigureStatus: "",
         securityPatchStatus: "",
     },
+    polling: {
+        storageVm: { enabled: false, reason: "배포 상태 확인 전" },
+        storageCluster: { enabled: false, reason: "배포 상태 확인 전" },
+        gfsResource: { enabled: false, reason: "배포 상태 확인 전" },
+        gfsDisk: { enabled: false, reason: "배포 상태 확인 전" },
+        cloudVm: { enabled: false, reason: "배포 상태 확인 전" },
+        cloudCluster: { enabled: false, reason: "배포 상태 확인 전" },
+        mold: { enabled: false, reason: "배포 상태 확인 전" },
+    },
     checkedAt: "",
 };
 
@@ -174,6 +215,7 @@ export const LICENSE_REQUIRED_DEPLOY_STATUS: DeployStatusData = {
         ...DEPLOY_STATUS_FALLBACK.raw,
         licenseStatus: "false",
     },
+    polling: DEPLOY_STATUS_FALLBACK.polling,
     checkedAt: new Date().toISOString(),
 };
 
@@ -239,6 +281,30 @@ function mapRawStatus(raw: DeployStatusRawResponse | undefined): DeployStatusRaw
     };
 }
 
+function mapPollingTarget(
+    target: DeployPollingTargetResponse | undefined,
+    fallbackReason: string
+): DeployPollingTarget {
+    return {
+        enabled: target?.enabled === true,
+        reason: normalizeString(target?.reason) || fallbackReason,
+    };
+}
+
+function mapPollingPolicy(policy: DeployPollingPolicyResponse | undefined): DeployPollingPolicy {
+    const fallbackReason = "배포 선행 조건이 완료되지 않았습니다.";
+
+    return {
+        storageVm: mapPollingTarget(policy?.storage_vm, fallbackReason),
+        storageCluster: mapPollingTarget(policy?.storage_cluster, fallbackReason),
+        gfsResource: mapPollingTarget(policy?.gfs_resource, fallbackReason),
+        gfsDisk: mapPollingTarget(policy?.gfs_disk, fallbackReason),
+        cloudVm: mapPollingTarget(policy?.cloud_vm, fallbackReason),
+        cloudCluster: mapPollingTarget(policy?.cloud_cluster, fallbackReason),
+        mold: mapPollingTarget(policy?.mold, fallbackReason),
+    };
+}
+
 function mapDeployStatus(data: DeployStatusDataResponse): DeployStatusData {
     return {
         osType: normalizeString(data.os_type),
@@ -256,6 +322,7 @@ function mapDeployStatus(data: DeployStatusDataResponse): DeployStatusData {
             })).filter((warning) => warning.key)
             : [],
         raw: mapRawStatus(data.raw),
+        polling: mapPollingPolicy(data.polling),
         checkedAt: normalizeString(data.checked_at),
     };
 }

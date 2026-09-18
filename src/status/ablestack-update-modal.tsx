@@ -10,15 +10,10 @@ import {
     ModalBody,
     ModalFooter,
     ModalHeader,
-    Spinner,
     Switch,
     TextInput,
 } from "@patternfly/react-core";
 
-import {
-    fetchVersionInfo,
-    type VersionInfo,
-} from "../services/api/version.ts";
 import {
     fetchVersionUpdateInfo,
     runVersionUpdate,
@@ -26,6 +21,10 @@ import {
     type VersionUpdateRunResult,
     type VersionUpdateType,
 } from "../services/api/version-update.ts";
+import {
+    fetchVersionInfo,
+    type VersionInfo,
+} from "../services/api/version.ts";
 
 interface AblestackUpdateModalProps {
   isOpen: boolean;
@@ -224,7 +223,10 @@ export default function AblestackUpdateModal({
                     </div>
 
                     <Form className="ct-ablestack-update-modal__form">
-                        <FormGroup label="업데이트 방식" isRequired fieldId="ablestack-update-type">
+                        <FormGroup
+                          label="업데이트 방식" isRequired
+                          fieldId="ablestack-update-type"
+                        >
                             <div className="ct-ablestack-update-modal__type-grid" id="ablestack-update-type">
                                 {UPDATE_TYPES.map((item) => (
                                     <button
@@ -232,7 +234,9 @@ export default function AblestackUpdateModal({
                                       type="button"
                                       className={[
                                           "ct-ablestack-update-modal__type-card",
-                                          updateType === item.type ? "ct-ablestack-update-modal__type-card--selected" : "",
+                                          updateType === item.type
+                                              ? "ct-ablestack-update-modal__type-card--selected"
+                                              : "",
                                       ].join(" ")}
                                       onClick={() => {
                                           setUpdateType(item.type);
@@ -247,7 +251,10 @@ export default function AblestackUpdateModal({
                             </div>
                         </FormGroup>
 
-                        <FormGroup label="마운트 경로" isRequired fieldId="ablestack-update-mount-path">
+                        <FormGroup
+                          label="마운트 경로" isRequired
+                          fieldId="ablestack-update-mount-path"
+                        >
                             <div className="ct-ablestack-update-modal__path-row">
                                 <TextInput
                                   id="ablestack-update-mount-path"
@@ -262,10 +269,11 @@ export default function AblestackUpdateModal({
                                 <Button
                                   variant="secondary"
                                   isDisabled={!canCheck}
+                                  isLoading={submitState === "checking"}
+                                  spinnerAriaLabel="버전 확인 중"
                                   onClick={checkVersionInfo}
                                 >
-                                    {submitState === "checking" && <Spinner size="sm" aria-label="버전 확인 중" />}
-                                    버전 확인
+                                    {submitState === "checking" ? "확인 중" : "버전 확인"}
                                 </Button>
                             </div>
                         </FormGroup>
@@ -319,10 +327,11 @@ export default function AblestackUpdateModal({
                 <Button
                   variant="primary"
                   isDisabled={!canExecute}
+                  isLoading={submitState === "running"}
+                  spinnerAriaLabel="ABLESTACK 업데이트 실행 중"
                   onClick={executeUpdate}
                 >
-                    {submitState === "running" && <Spinner size="sm" aria-label="ABLESTACK 업데이트 실행 중" />}
-                    실행
+                    {submitState === "running" ? "실행 중" : "실행"}
                 </Button>
                 <Button
                   variant="link"

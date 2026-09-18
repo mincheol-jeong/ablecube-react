@@ -296,7 +296,7 @@
 .ct-status-card__loading-message {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   padding-block: 3px;
   padding-inline: 8px 10px;
   border-radius: 999px;
@@ -411,6 +411,10 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px 14px;
+}
+
+.ct-status-card__info-grid--gfs-resource {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .ct-status-card__info-item {
@@ -1121,6 +1125,23 @@
   }
 }
 
+.ct-disk-table--nowrap {
+  width: max-content;
+  min-width: 100%;
+
+  th,
+  td,
+  .ct-disk-table__name,
+  .ct-disk-table__mono {
+    white-space: nowrap;
+    overflow-wrap: normal;
+  }
+}
+
+.ct-gfs-disk-action-modal {
+  width: min(1120px, calc(100vw - 32px));
+}
+
 .ct-disk-table__select {
   inline-size: 42px;
   text-align: center;
@@ -1128,6 +1149,10 @@
   input {
     vertical-align: middle;
   }
+}
+
+.ct-disk-table--static tbody tr {
+  cursor: default;
 }
 
 .ct-disk-table__name {
@@ -1179,6 +1204,25 @@
   background: currentcolor;
 }
 
+.ct-disk-table__index {
+  color: #475569;
+  font-weight: 750;
+  text-align: center;
+}
+
+.ct-disk-table__copy-list {
+  display: grid;
+  gap: 5px;
+  min-inline-size: 280px;
+}
+
+.ct-disk-table__copy {
+  max-inline-size: 100%;
+  font-family: Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
 .ct-action-progress-modal__body {
   display: grid;
   justify-items: center;
@@ -1196,12 +1240,17 @@
 }
 
 .ct-action-progress-modal__running {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  max-inline-size: 100%;
-  color: #0f172a;
+  gap: 10px;
+  inline-size: 100%;
+  padding-block: 14px;
+  padding-inline: 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  color: #1e3a5f;
+  background: linear-gradient(135deg, #eff6ff 0%, #ecfeff 100%);
+  box-shadow: 0 6px 18px rgb(37 99 235 / 7%);
   line-height: 1.4;
 
   p {
@@ -1215,6 +1264,38 @@
   }
 }
 
+.ct-action-progress-modal__message {
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  margin: 0;
+  padding-block: 8px;
+  padding-inline: 14px;
+  border: 0;
+  border-radius: 999px;
+  color: #1e3a5f;
+  background: #eff6ff;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.ct-action-progress-modal__message--running {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.ct-action-progress-modal__message--success {
+  color: #166534;
+  background: #ecfdf5;
+}
+
+.ct-action-progress-modal__message--error {
+  color: #991b1b;
+  background: #fef2f2;
+}
+
 .pf-v6-c-spinner.ct-action-progress-modal__spinner {
   --pf-v6-c-spinner--diameter: 16px;
 
@@ -1222,6 +1303,7 @@
   align-self: center;
   inline-size: var(--pf-v6-c-spinner--diameter);
   block-size: var(--pf-v6-c-spinner--diameter);
+  color: #2563eb;
 }
 
 .ct-action-progress-modal__footer--running {
@@ -1461,6 +1543,10 @@
 }
 
 @media (max-width: 768px) {
+  .ct-status-card__info-grid--gfs-resource {
+    grid-template-columns: 1fr;
+  }
+
   .ct-status-card__capacity-grid {
     grid-template-columns: 1fr;
   }

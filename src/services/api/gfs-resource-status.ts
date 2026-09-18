@@ -28,6 +28,7 @@ interface GfsResourceStatusResponse {
     resources?: {
       fence_resources?: GfsResourceItem[];
       glue_locking_resources?: GfsResourceItem[];
+      gfs_mount_resources?: GfsResourceItem[];
       glue_gfs_resources?: GfsResourceItem[];
     };
   };
@@ -133,14 +134,18 @@ function mapGfsResourceStatus(
 ): GfsResourceStatusData {
   const fenceResources = val.resources?.fence_resources ?? [];
   const lockingResources = val.resources?.glue_locking_resources ?? [];
-  const gfsResources = val.resources?.glue_gfs_resources ?? [];
+  const gfsResources = val.resources?.gfs_mount_resources
+    ?? val.resources?.glue_gfs_resources
+    ?? [];
   const statuses = [
     resourceHealth(fenceResources),
     resourceHealth(lockingResources),
     resourceHealth(gfsResources),
   ];
   const isHealthy = hasHealthyStatus(statuses);
-  const isNotConfigured = fenceResources.length === 0 || lockingResources.length === 0;
+  const isNotConfigured = fenceResources.length === 0
+    || lockingResources.length === 0
+    || gfsResources.length === 0;
 
   return {
     fenceDeviceStatus: statuses[0],

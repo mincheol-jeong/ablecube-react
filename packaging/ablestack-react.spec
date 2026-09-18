@@ -30,7 +30,7 @@ install -Dpm 0644 io.ablecloud.ablestack.metainfo.xml \
 
 %files
 %license LICENSE
-%doc README.md CHANGELOG.md VERSION.md
+%doc README.md CHANGELOG.md VERSION
 %{_datadir}/cockpit/ablestack
 %{_datadir}/metainfo/io.ablecloud.ablestack.metainfo.xml
 

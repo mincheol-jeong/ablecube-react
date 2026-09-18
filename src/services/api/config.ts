@@ -7,7 +7,8 @@ const CUBE_CONF_PATHS = [
     "/root/ablecube-react/cube.conf",
 ];
 const STATUS_CARD_REFRESH_INTERVAL_CONF_KEY = "DEFAULT_STATUS_CARD_REFRESH_INTERVAL_SECONDS";
-const DEFAULT_CUBE_API_BASE_URL = "http://127.0.0.1:8090";
+const DEFAULT_CUBE_API_BASE_URL = "http://127.0.0.1:18090";
+const ABLESTACK_API_ENV_PATH = "/etc/ablestack/ablestack-api.env";
 const AUTH_TOKEN_HELPER = "/usr/bin/ablestack-auth-token";
 
 export const FALLBACK_STATUS_CARD_REFRESH_INTERVAL_SECONDS = 10;
@@ -23,6 +24,7 @@ interface AuthTokenHelperResponse {
 }
 
 let cubeConfPromise: Promise<Record<string, string>> | null = null;
+let apiEnvPromise: Promise<Record<string, string>> | null = null;
 let cubeApiConfigPromise: Promise<CubeApiConfig> | null = null;
 let cubeConfReadError = "";
 
@@ -90,6 +92,31 @@ async function getCubeConf(): Promise<Record<string, string>> {
     return cubeConfPromise;
 }
 
+async function getApiEnv(): Promise<Record<string, string>> {
+    if (!apiEnvPromise) {
+        apiEnvPromise = cockpit.file(ABLESTACK_API_ENV_PATH, { superuser: "try" })
+                .read()
+                .then((content) => parseCubeConf(typeof content === "string" ? content : ""))
+                .catch(() => ({}));
+    }
+
+    return apiEnvPromise;
+}
+
+function localApiBaseUrl(config: Record<string, string>, apiEnv: Record<string, string>): string {
+    if (config.CUBE_API_BASE_URL) {
+        return normalizeBaseUrl(config.CUBE_API_BASE_URL);
+    }
+
+    const port = apiEnv.ABLESTACK_API_PORT;
+
+    if (port && /^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535) {
+        return `http://127.0.0.1:${Number(port)}`;
+    }
+
+    return DEFAULT_CUBE_API_BASE_URL;
+}
+
 function parsePositiveIntervalSeconds(value: string | undefined): number {
     if (!value) {
         return FALLBACK_STATUS_CARD_REFRESH_INTERVAL_SECONDS;
@@ -145,8 +172,8 @@ async function resolveApiToken(
 }
 
 function createCubeApiConfig(forceIssuedToken = false): Promise<CubeApiConfig> {
-    return getCubeConf().then(async (config) => {
-        const baseUrl = normalizeBaseUrl(config.CUBE_API_BASE_URL || DEFAULT_CUBE_API_BASE_URL);
+    return Promise.all([getCubeConf(), getApiEnv()]).then(async ([config, apiEnv]) => {
+        const baseUrl = localApiBaseUrl(config, apiEnv);
         const token = await resolveApiToken(config, forceIssuedToken);
 
         return {
@@ -174,9 +201,9 @@ export async function getCubeApiBaseUrl(): Promise<string> {
         return DEFAULT_CUBE_API_BASE_URL;
     }
 
-    const config = await getCubeConf();
+    const [config, apiEnv] = await Promise.all([getCubeConf(), getApiEnv()]);
 
-    return normalizeBaseUrl(config.CUBE_API_BASE_URL || DEFAULT_CUBE_API_BASE_URL);
+    return localApiBaseUrl(config, apiEnv);
 }
 
 export async function getCubeApiConfig(): Promise<CubeApiConfig> {

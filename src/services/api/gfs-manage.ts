@@ -2,6 +2,7 @@ import { requestCubeApi } from "./client.ts";
 
 export type GfsManageAction =
   | "init-pcs-cluster"
+  | "create-gfs"
   | "configure-stonith"
   | "check-ipmi"
   | "set-alert";
@@ -16,6 +17,7 @@ export interface GfsManageStonithDevice {
 }
 
 export interface GfsManageTargetResult {
+  step?: string;
   hostname: string;
   target: string;
   code: number;
@@ -71,6 +73,7 @@ function normalizeTargetResult(value: unknown): GfsManageTargetResult | null {
     }
 
     return {
+        step: normalizeString(value.step) || undefined,
         hostname: normalizeString(value.hostname),
         target: normalizeString(value.target),
         code: normalizeNumber(value.code),
@@ -142,6 +145,9 @@ export function initGfsPcsCluster(disks: string[]): Promise<GfsManageResult> {
         "init-pcs-cluster",
         {
             disks,
+            cluster_name: "cloudcenter_cluster",
+            cluster_user: "hacluster",
+            cluster_password: "password",
             vg_name: "vg_glue",
             lv_name: "lv_glue",
             volume_groups: [{ vg_name: "vg_glue", lv_name: "lv_glue" }],
@@ -155,6 +161,21 @@ export function configureGfsStonith(stonith: GfsManageStonithDevice[]): Promise<
         "configure-stonith",
         { stonith },
         "GFS IPMI STONITH 구성에 실패했습니다."
+    );
+}
+
+export function createGfsStorage(disks: string[]): Promise<GfsManageResult> {
+    return runGfsManage(
+        "create-gfs",
+        {
+            disks,
+            cluster_name: "cloudcenter_cluster",
+            vg_name: "vg_glue",
+            lv_name: "lv_glue",
+            gfs_name: "glue-gfs",
+            mount_point: "/mnt/glue-gfs",
+        },
+        "GFS2 파일시스템과 PCS 리소스 생성에 실패했습니다."
     );
 }
 

@@ -144,7 +144,7 @@ const ACTION_LABELS: Record<string, string> = {
     configure_hci_shared_file: "RBD/GFS 구성",
     configure_gfs_storage: "GFS 스토리지 구성",
     configure_local_storage: "로컬 스토리지 구성",
-    deploy_cloud_vm: "클라우드 VM 배포",
+    deploy_cloud_vm: "클라우드 VM 구성",
     configure_cloud_vm: "클라우드센터 구성",
     configure_cloud_cluster: "클라우드 PCS 구성",
     configure_cloud_resource: "클라우드 리소스 구성",
@@ -195,6 +195,21 @@ const FLOW_STAGE_ACTIONS: Record<string, string[]> = {
     [SECURITY_PATCH_STAGE]: ["run_security_patch"],
 };
 
+const FLOW_STAGE_PRIMARY_ACTIONS: Record<string, string[]> = {
+    [LICENSE_STAGE]: ["manage_license"],
+    cluster_prepare: ["prepare_cluster_config"],
+    storage_vm_configure: ["deploy_storage_vm"],
+    [STORAGE_CENTER_CONFIGURE_STAGE]: ["configure_storage_vm"],
+    [STORAGE_CLUSTER_CONFIGURE_STAGE]: ["configure_storage_cluster"],
+    [HCI_SHARED_FILE_CONFIGURE_STAGE]: ["configure_hci_shared_file"],
+    gfs_storage_configure: ["configure_gfs_storage"],
+    local_storage_configure: ["configure_local_storage"],
+    cloud_vm_configure: ["deploy_cloud_vm"],
+    [CLOUD_CENTER_CONFIGURE_STAGE]: ["configure_cloud_vm"],
+    [MONITORING_CENTER_CONFIGURE_STAGE]: ["configure_monitoring"],
+    [SECURITY_PATCH_STAGE]: ["run_security_patch"],
+};
+
 const STAGE_CLICK_ACTION: Record<string, string> = {
     [LICENSE_STAGE]: "manage_license",
     cluster_prepare: "prepare_cluster_config",
@@ -205,7 +220,7 @@ const STAGE_CLICK_ACTION: Record<string, string> = {
     [HCI_SHARED_FILE_CONFIGURE_STAGE]: "configure_hci_shared_file",
     gfs_storage_configure: "configure_gfs_storage",
     local_storage_configure: "configure_local_storage",
-    cloud_vm_configure: "configure_cloud_vm",
+    cloud_vm_configure: "deploy_cloud_vm",
     [CLOUD_CENTER_CONFIGURE_STAGE]: "configure_cloud_vm",
     [CLOUD_CENTER_CONNECT_STAGE]: "open_cloud_center",
     [MONITORING_CENTER_CONFIGURE_STAGE]: "configure_monitoring",
@@ -648,6 +663,9 @@ function visibleActions(status: DeployStatusData, currentStage: string): string[
     const actions = isLicenseActionRequired
         ? ["manage_license"]
         : [
+            ...(!isStageDone(currentStage, status)
+                ? (FLOW_STAGE_PRIMARY_ACTIONS[currentStage] ?? [])
+                : []),
             ...status.availableActions.filter((action) => ACTION_STAGE[action] === currentStage),
             ...(FLOW_STAGE_ACTIONS[currentStage] ?? []).filter((action) =>
                 status.availableActions.includes(action)),
@@ -916,7 +934,8 @@ export default function DeploymentOverview({
         currentStage === LICENSE_STAGE ||
         currentStage === "cluster_prepare" ||
         currentStage === PRODUCT_FLOW_PENDING_STAGE);
-    const showDeployRunControl = !useStatusPlaceholder &&
+    const isLicenseReady = data.raw.licenseStatus.toLowerCase() === "true";
+    const showDeployRunControl = !useStatusPlaceholder && isLicenseReady &&
         !isStageDone(MONITORING_CENTER_CONNECT_STAGE, data);
 
     if (mode === "ribbon") {
@@ -1264,12 +1283,11 @@ export default function DeploymentOverview({
                                         {ACTION_LABELS[action] ?? action}
                                     </Button>
                                 ))}
-                            <Button
-                              variant="secondary"
-                              onClick={onOpenDeployRun}
-                            >
-                                올인원 단계 입력
-                            </Button>
+                            {showDeployRunControl && (
+                                <Button variant="secondary" onClick={onOpenDeployRun}>
+                                    올인원 단계 입력
+                                </Button>
+                            )}
                         </div>
                     </div>
                 </div>

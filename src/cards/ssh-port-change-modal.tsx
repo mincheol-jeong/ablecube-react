@@ -1,6 +1,7 @@
 // SSH Port 변경 입력 및 확인 모달입니다.
 import React from "react";
 import {
+  Alert,
   Button,
   Content,
   Modal,
@@ -13,6 +14,8 @@ interface SshPortChangeModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: (beforePort: string, afterPort: string) => void;
+  isSubmitting?: boolean;
+  errorMessage?: string;
 }
 
 const isValidPort = (value: string) => {
@@ -24,6 +27,8 @@ export default function SshPortChangeModal({
   isOpen,
   onClose,
   onConfirm,
+  isSubmitting = false,
+  errorMessage,
 }: SshPortChangeModalProps) {
   const [beforePort, setBeforePort] = React.useState("");
   const [afterPort, setAfterPort] = React.useState("");
@@ -85,17 +90,24 @@ export default function SshPortChangeModal({
             />
             <span>SSH Port 확인</span>
           </label>
+          {errorMessage && (
+            <Alert isInline variant="danger" title="SSH Port 변경 실패">
+              {errorMessage}
+            </Alert>
+          )}
         </div>
       </ModalBody>
       <ModalFooter>
         <Button
           variant="primary"
-          isDisabled={!isExecutable}
+          isDisabled={!isExecutable || isSubmitting}
+          isLoading={isSubmitting}
+          spinnerAriaLabel="SSH 포트 변경 실행 중"
           onClick={() => onConfirm(beforePort, afterPort)}
         >
-          실행
+          {isSubmitting ? "실행 중" : "실행"}
         </Button>
-        <Button variant="link" onClick={onClose}>
+        <Button variant="link" isDisabled={isSubmitting} onClick={onClose}>
           취소
         </Button>
       </ModalFooter>

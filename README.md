@@ -80,7 +80,7 @@ RPM을 생성하려면 RPM 기반 Linux 환경에서 다음을 실행하세요.
 
 스크립트는 프로덕션 `dist/`를 먼저 생성한 후, 해당 정적 파일을 포함한
 `ablestack-cockpit-plugin` RPM과 source RPM을 만듭니다. 결과물은
-`./artifacts/rpm/`에 생성됩니다. 기본 버전은 루트의 `VERSION.md` 파일에서
+`./artifacts/rpm/`에 생성됩니다. 기본 버전은 루트의 `VERSION` 파일에서
 읽고, 해당 버전의 `## [버전]` 항목이 `CHANGELOG.md`에 있어야 빌드됩니다.
 두 파일은 RPM 문서에도 포함됩니다.
 
@@ -115,11 +115,11 @@ ablestack-cockpit-plugin-v1.2.0-1.el9.x86_64.rpm
 
 ### 버전 관리
 
-릴리스할 때는 먼저 `VERSION.md`의 버전을 변경하고, 같은 버전의 변경 항목을
+릴리스할 때는 먼저 `VERSION`의 버전을 변경하고, 같은 버전의 변경 항목을
 `CHANGELOG.md` 맨 위에 추가합니다. 이후 같은 버전의 `v` 태그를 올립니다.
 
 ```
-# VERSION.md: v1.2.0
+# VERSION: v1.2.0
 git tag v1.2.0
 git push origin v1.2.0
 ```

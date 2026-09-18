@@ -32,7 +32,7 @@ export default function ActionProgressModal({
     ? "완료"
     : phase === "error"
       ? "실패"
-      : "진행중";
+      : "진행 중";
   const bodyClassName = isRunning
     ? "ct-action-progress-modal__body ct-action-progress-modal__body--running"
     : "ct-action-progress-modal__body";
@@ -55,7 +55,12 @@ export default function ActionProgressModal({
                 aria-label={statusTitle}
                 className="ct-action-progress-modal__spinner"
               />
-              <Content component="p">{message}</Content>
+              <Content
+                component="p"
+                className="ct-action-progress-modal__message ct-action-progress-modal__message--running"
+              >
+                {message}
+              </Content>
             </div>
           ) : (
             <>
@@ -64,7 +69,12 @@ export default function ActionProgressModal({
                 variant={phase === "success" ? "success" : "danger"}
                 title={statusTitle}
               />
-              <Content component="p">{message}</Content>
+              <Content
+                component="p"
+                className={`ct-action-progress-modal__message ct-action-progress-modal__message--${phase}`}
+              >
+                {message}
+              </Content>
             </>
           )}
         </div>
@@ -80,7 +90,7 @@ export default function ActionProgressModal({
       ) : (
         <ModalFooter>
           <Button variant="primary" onClick={onClose}>
-            확인
+            {phase === "success" ? "완료" : "닫기"}
           </Button>
         </ModalFooter>
       )}

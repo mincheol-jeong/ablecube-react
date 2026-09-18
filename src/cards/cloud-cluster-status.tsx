@@ -18,12 +18,18 @@ import {
   STATUS_UNKNOWN_LABEL,
   StatusLoadingMessage,
 } from "./status-loading";
+import ActionProgressModal from "../components/common/ActionProgressModal";
+import type { ActionProgressPhase } from "../components/common/ActionProgressModal";
 import ConfirmActionModal from "../components/common/ConfirmActionModal";
 import { useStatusPolling } from "../hooks/useStatusPolling";
 import {
   CLOUD_CLUSTER_STATUS_FALLBACK,
+  controlCloudCenterVm,
+  controlCloudClusterPcs,
   fetchCloudClusterStatus,
+  updateCloudCenterMonitoringConfig,
 } from "../services/api/cloud-cluster-status";
+import { runSecurityPatch } from "../services/api/security-patch";
 import {
   DotStatus,
   InfoGrid,
@@ -75,27 +81,25 @@ CloudClusterConfirmAction,
   },
 };
 
-const parseMigrationNodes = (nodeStatus: string, executionNode: string) => {
-  const match = nodeStatus.match(/\(([^)]+)\)/);
-  const nodes = match
-    ? match[1].split(",").map((node) => node.trim()).filter(Boolean)
-    : [""];
-
-  return nodes.filter((node) => node !== executionNode);
-};
-
-export default function CloudClusterStatus() {
+export default function CloudClusterStatus({ pollingEnabled = true }: { pollingEnabled?: boolean }) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [confirmAction, setConfirmAction] = React.useState<CloudClusterConfirmAction | null>(null);
   const [isMigrationModalOpen, setIsMigrationModalOpen] = React.useState(false);
   const [isSshPortChangeModalOpen, setIsSshPortChangeModalOpen] = React.useState(false);
+  const [actionProgress, setActionProgress] = React.useState<{
+    isOpen: boolean;
+    title: string;
+    phase: ActionProgressPhase;
+    message: string;
+  }>({ isOpen: false, title: "", phase: "running", message: "" });
 
   const handleStatusError = React.useCallback((error: unknown) => {
     console.error("cloud cluster status API error:", error);
   }, []);
-  const { data, isCollecting } = useStatusPolling({
+  const { data, isCollecting, refresh } = useStatusPolling({
     fetcher: fetchCloudClusterStatus,
     fallback: CLOUD_CLUSTER_STATUS_FALLBACK,
+    enabled: pollingEnabled,
     onError: handleStatusError,
   });
 
@@ -112,16 +116,17 @@ export default function CloudClusterStatus() {
   const isClusterError = data.clusterStatus === "HEALTH_ERR";
   const isClusterUnknown = data.clusterStatus === "N/A" || data.clusterStatus === "";
   const footerMessage = isCollecting
-    ? "클라우드센터 클러스터 상태를 확인하고 있습니다."
+    ? "인프라 클러스터 상태를 확인하고 있습니다."
     : isClusterUnknown
-    ? "클라우드센터 클러스터 상태 정보를 확인할 수 없습니다."
+    ? "인프라 클러스터 상태 정보를 확인할 수 없습니다."
     : isClusterError
-      ? "클라우드센터 클러스터가 구성되지 않았습니다."
-      : "클라우드센터 클러스터가 구성되었습니다.";
+      ? "인프라 클러스터가 구성되지 않았습니다."
+      : "인프라 클러스터가 구성되었습니다.";
   const footerColor = isCollecting ? "#f0ab00" : isClusterUnknown ? "#f0ab00" : isClusterError ? "#c9190b" : "#3e8635";
-  const isClusterReady = data.clusterStatus === "HEALTH_OK";
+  const isActionRunning = actionProgress.isOpen && actionProgress.phase === "running";
+  const isClusterReady = data.clusterStatus === "HEALTH_OK" && data.nodeStatus !== "N/A";
   const isCloudVmRunning = data.resourceStatus === "실행중";
-  const migrationNodes = parseMigrationNodes(data.nodeStatus, data.executionNode);
+  const migrationNodes = data.onlineNodes.filter((node) => node !== data.executionNode);
   const currentConfirmAction = confirmAction ? CLOUD_CLUSTER_ACTIONS[confirmAction] : null;
 
   const onSelect = () => setIsOpen(false);
@@ -135,11 +140,48 @@ export default function CloudClusterStatus() {
     setConfirmAction(null);
   };
 
-  const confirmCloudClusterAction = () => {
+  const errorMessage = (error: unknown) => error instanceof Error
+    ? error.message
+    : "요청을 처리하지 못했습니다.";
+
+  const runAction = async (
+    title: string,
+    runningMessage: string,
+    successMessage: string,
+    action: () => Promise<unknown>
+  ) => {
+    setActionProgress({ isOpen: true, title, phase: "running", message: runningMessage });
+
+    try {
+      await action();
+      await refresh();
+      setActionProgress({ isOpen: true, title, phase: "success", message: successMessage });
+    } catch (error) {
+      const message = errorMessage(error);
+      setActionProgress({ isOpen: true, title, phase: "error", message });
+    }
+  };
+
+  const confirmCloudClusterAction = async () => {
     if (!confirmAction) return;
-    // TODO: 백엔드 API 전환 후 기존 card-cloud-cluster-status.py, create_address.py, wall 설정 호출로 연결합니다.
-    console.log("cloud cluster action", confirmAction);
+
+    const action = confirmAction;
+    const request = action === "start"
+      ? () => controlCloudCenterVm("start")
+      : action === "stop"
+        ? () => controlCloudCenterVm("stop")
+        : action === "cleanup"
+          ? () => controlCloudClusterPcs("cleanup")
+          : updateCloudCenterMonitoringConfig;
+    const messages = {
+      start: ["클라우드센터VM을 시작하고 있습니다.", "클라우드센터VM 시작 요청이 완료되었습니다."],
+      stop: ["클라우드센터VM을 정지하고 있습니다.", "클라우드센터VM 정지 요청이 완료되었습니다."],
+      cleanup: ["클라우드센터 클러스터를 클린업하고 있습니다.", "클라우드센터 클러스터 클린업이 완료되었습니다."],
+      monitoringConfigUpdate: ["모니터링센터 수집 정보를 업데이트하고 있습니다.", "모니터링센터 수집 정보 업데이트가 완료되었습니다."],
+    } as const;
+
     setConfirmAction(null);
+    await runAction(CLOUD_CLUSTER_ACTIONS[action].title, messages[action][0], messages[action][1], request);
   };
 
   const openMigrationModal = () => {
@@ -151,10 +193,14 @@ export default function CloudClusterStatus() {
     setIsMigrationModalOpen(false);
   };
 
-  const confirmMigration = (targetNode: string) => {
-    // TODO: 백엔드 API 전환 후 card-cloud-cluster-status.py pcsMigration --target 호출로 연결합니다.
-    console.log("cloud vm migration", targetNode);
+  const confirmMigration = async (targetNode: string) => {
     setIsMigrationModalOpen(false);
+    await runAction(
+      "클라우드센터VM 마이그레이션",
+      "클라우드센터VM을 마이그레이션하고 있습니다.",
+      `클라우드센터VM을 ${targetNode} 노드로 마이그레이션했습니다.`,
+      () => controlCloudClusterPcs("move", targetNode)
+    );
   };
 
   const openSshPortChangeModal = () => {
@@ -166,10 +212,25 @@ export default function CloudClusterStatus() {
     setIsSshPortChangeModalOpen(false);
   };
 
-  const confirmSshPortChange = (beforePort: string, afterPort: string) => {
-    // TODO: 백엔드 API 전환 후 security_patch.py --ssh-port before -P after --port-change 호출로 연결합니다.
-    console.log("ssh port change", beforePort, afterPort);
+  const confirmSshPortChange = async (beforePort: string, afterPort: string) => {
     setIsSshPortChangeModalOpen(false);
+    await runAction(
+      "SSH Port 변경",
+      `SSH Port를 ${beforePort}에서 ${afterPort}(으)로 변경하고 있습니다.`,
+      `SSH Port를 ${afterPort}(으)로 변경했습니다.`,
+      () => runSecurityPatch({
+        targets: ["all"],
+        sshUser: "root",
+        sshPort: Number(beforePort),
+        dryRun: false,
+        portChangeOnly: true,
+        newPort: Number(afterPort),
+      })
+    );
+  };
+
+  const closeActionProgressModal = () => {
+    setActionProgress((current) => ({ ...current, isOpen: false }));
   };
 
   return (
@@ -190,6 +251,7 @@ export default function CloudClusterStatus() {
                   variant="plain"
                   aria-expanded={isOpen}
                   aria-label={isOpen ? "카드 메뉴 닫기" : "카드 메뉴 열기"}
+                  isDisabled={isActionRunning}
                   onClick={() => setIsOpen(!isOpen)}
                 >
                   <span
@@ -252,8 +314,8 @@ export default function CloudClusterStatus() {
         <CardTitle>
           <StatusCardHeading
             icon={<span className="ct-status-card__emoji" aria-hidden="true">☁</span>}
-            title="클라우드센터 클러스터 상태"
-            subtitle="Mold Cluster"
+            title="인프라 클러스터 상태"
+            subtitle="Pacemaker"
             tone="cloud"
           />
         </CardTitle>
@@ -266,9 +328,9 @@ export default function CloudClusterStatus() {
                 {statusMeta.label}
               </DotStatus>
           </InfoItem>
-          <InfoItem label="리소스 상태">{data.resourceStatus}</InfoItem>
           <InfoItem label="노드 구성" full mono>{data.nodeStatus}</InfoItem>
-          <InfoItem label="VM 실행노드" mono>{data.executionNode}</InfoItem>
+          <InfoItem label="CCVM 실행 노드" mono>{data.executionNode}</InfoItem>
+          <InfoItem label="현재 DC" mono>{data.currentDc}</InfoItem>
         </InfoGrid>
       </CardBody>
 
@@ -300,6 +362,14 @@ export default function CloudClusterStatus() {
         isOpen={isSshPortChangeModalOpen}
         onClose={closeSshPortChangeModal}
         onConfirm={confirmSshPortChange}
+      />
+
+      <ActionProgressModal
+        isOpen={actionProgress.isOpen}
+        title={actionProgress.title}
+        phase={actionProgress.phase}
+        message={actionProgress.message}
+        onClose={closeActionProgressModal}
       />
     </Card>
   );

@@ -50,6 +50,12 @@ jobs:
             exit 2
           fi
 
+          file_version="$(tr -d '[:space:]' < VERSION)"
+          if [ "$file_version" != "$version" ]; then
+            echo "VERSION ($file_version) must match the release version ($version)." >&2
+            exit 2
+          fi
+
           docker run --rm \
             -v "$PWD:/src" \
             -w /src \

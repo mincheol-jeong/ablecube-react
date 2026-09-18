@@ -1,6 +1,7 @@
 // 클라우드센터VM 마이그레이션 대상 노드 선택 모달입니다.
 import React from "react";
 import {
+  Alert,
   Button,
   Content,
   Modal,
@@ -14,6 +15,8 @@ interface CloudClusterMigrationModalProps {
   nodes: string[];
   onClose: () => void;
   onConfirm: (targetNode: string) => void;
+  isSubmitting?: boolean;
+  errorMessage?: string;
 }
 
 export default function CloudClusterMigrationModal({
@@ -21,6 +24,8 @@ export default function CloudClusterMigrationModal({
   nodes,
   onClose,
   onConfirm,
+  isSubmitting = false,
+  errorMessage,
 }: CloudClusterMigrationModalProps) {
   const [targetNode, setTargetNode] = React.useState("");
 
@@ -64,17 +69,24 @@ export default function CloudClusterMigrationModal({
               마이그레이션 가능한 대상 노드가 없습니다.
             </Content>
           )}
+          {errorMessage && (
+            <Alert isInline variant="danger" title="마이그레이션 실패">
+              {errorMessage}
+            </Alert>
+          )}
         </div>
       </ModalBody>
       <ModalFooter>
         <Button
           variant="primary"
-          isDisabled={!targetNode}
+          isDisabled={!targetNode || isSubmitting}
+          isLoading={isSubmitting}
+          spinnerAriaLabel="클라우드센터 VM 마이그레이션 실행 중"
           onClick={() => onConfirm(targetNode)}
         >
-          실행
+          {isSubmitting ? "실행 중" : "실행"}
         </Button>
-        <Button variant="link" onClick={onClose}>
+        <Button variant="link" isDisabled={isSubmitting} onClick={onClose}>
           취소
         </Button>
       </ModalFooter>

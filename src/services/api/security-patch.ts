@@ -6,7 +6,7 @@ export interface SecurityPatchRunOptions {
   sshPort: number;
   dryRun: boolean;
   addHost?: boolean;
-  portChange: boolean;
+  portChangeOnly?: boolean;
   newPort?: number;
 }
 
@@ -86,21 +86,22 @@ export async function runSecurityPatch({
     sshPort,
     dryRun,
     addHost,
-    portChange,
+    portChangeOnly = false,
     newPort,
 }: SecurityPatchRunOptions): Promise<SecurityPatchResult> {
     const parsed = await requestCubeApi<SecurityPatchResponse>(
         "/api/v1/cube/security/patch",
         {
             method: "POST",
+            maxTimeSeconds: 1800,
             body: {
                 targets,
                 ssh_user: sshUser,
                 ssh_port: sshPort,
                 dry_run: dryRun,
                 add_host: Boolean(addHost),
-                port_change: portChange,
-                ...(portChange && newPort ? { new_port: newPort } : {}),
+                port_change: portChangeOnly,
+                ...(newPort !== undefined ? { new_port: newPort } : {}),
             },
         }
     );

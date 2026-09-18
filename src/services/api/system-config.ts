@@ -60,3 +60,20 @@ export function markLicenseStatusComplete(): Promise<void> {
         depth2: "status",
     });
 }
+
+export async function markGfsConfigureComplete(): Promise<void> {
+    const parsed = await requestCubeApi<SystemConfigResponse>(
+        "/api/v1/cube/system/config",
+        {
+            method: "POST",
+            body: {
+                action: "gfs-configure",
+                value: "true",
+            },
+        }
+    );
+
+    if (!isSuccessCode(parsed.code)) {
+        throw new Error(responseMessage(parsed, "전체 호스트의 GFS 구성 완료 상태 반영에 실패했습니다."));
+    }
+}

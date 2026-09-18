@@ -180,8 +180,18 @@ export function StatusCardHeading({
   );
 }
 
-export function InfoGrid({ children }: { children: React.ReactNode }) {
-  return <div className="ct-status-card__info-grid">{children}</div>;
+export function InfoGrid({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={["ct-status-card__info-grid", className].filter(Boolean).join(" ")}>
+      {children}
+    </div>
+  );
 }
 
 export function InfoItem({ label, children, full = false, mono = false }: InfoItemProps) {

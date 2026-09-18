@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Build a noarch RPM containing the pre-built Cockpit plugin assets.
+# Build an x86_64 RPM containing the pre-built Cockpit plugin assets.
 set -euo pipefail
 
 readonly PACKAGE_NAME="ablestack-cockpit-plugin"
 readonly SPEC_FILE="packaging/ablestack-react.spec"
 readonly PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly VERSION_FILE="$PROJECT_ROOT/VERSION.md"
+readonly VERSION_FILE="$PROJECT_ROOT/VERSION"
 readonly CHANGELOG_FILE="$PROJECT_ROOT/CHANGELOG.md"
 
 cd -- "$PROJECT_ROOT"
@@ -14,11 +14,11 @@ usage() {
     cat <<'EOF'
 Usage: ./rpm-builder.sh [--version VERSION] [--release RELEASE] [--dist DIST] [--output DIRECTORY]
 
-Builds a source RPM and a noarch RPM. The plugin is built locally first, so the
+Builds a source RPM and an x86_64 RPM. The plugin is built locally first, so the
 RPM build itself does not need npm or network access.
 
 Options:
-  --version VERSION    RPM version (default: VERSION.md)
+  --version VERSION    RPM version (default: VERSION)
   --release RELEASE    RPM release (default: 1)
   --dist DIST          RPM distribution suffix, for example .el9 (default: system setting)
   --output DIRECTORY   Directory for the finished RPMs (default: ./artifacts/rpm)

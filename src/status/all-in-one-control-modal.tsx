@@ -19,7 +19,6 @@ import {
     ModalFooter,
     ModalHeader,
     Spinner,
-    TextArea,
     TextInput,
 } from "@patternfly/react-core";
 
@@ -32,7 +31,6 @@ import {
     type DeployStatusData,
 } from "../services/api/deploy-status.ts";
 import { fetchDiskInventory, fetchNicInventory, type DiskInventoryOption, type InventorySelectOption } from "../services/api/inventory";
-import { fetchCurrentHostIp, fetchCurrentHostname } from "../services/host";
 
 interface AllInOneControlModalProps {
   isOpen: boolean;
@@ -56,6 +54,7 @@ interface HostRow {
   index: string;
   hostname: string;
   ablecube: string;
+  storageIp?: string;
   scvmMngt?: string;
   ablecubePn?: string;
   scvm?: string;
@@ -92,17 +91,7 @@ const optionValueAt = (options: InventorySelectOption[], index: number) =>
 
 const PRODUCT_SET = new Set<string>(PRODUCT_OPTIONS.map((option) => option.value));
 
-const DEFAULT_HOSTS = [
-    "1,ablecube1,10.10.31.1,10.10.31.11,100.100.31.1,100.100.31.11,100.200.31.11",
-    "2,ablecube2,10.10.31.2,10.10.31.12,100.100.31.2,100.100.31.12,100.200.31.12",
-    "3,ablecube3,10.10.31.3,10.10.31.13,100.100.31.3,100.100.31.13,100.200.31.13",
-].join("\n");
-
-const DEFAULT_SCVM_BY_HOST = [
-    "ablecube1=/dev/disk/by-id/wwn-0x1111",
-    "ablecube2=/dev/disk/by-id/wwn-0x2222",
-    "ablecube3=/dev/disk/by-id/wwn-0x3333",
-].join("\n");
+const DEFAULT_HOSTS = "1,ablecube1,,,,,,";
 
 const STEP_STATUS_LABELS: Record<string, string> = {
     pending: "대기",
@@ -150,6 +139,7 @@ function parseHosts(value: string): HostRow[] {
             ablecubePn: fields[4] || undefined,
             scvm: fields[5] || undefined,
             scvmCn: fields[6] || undefined,
+            storageIp: fields[7] || undefined,
         };
     });
 }
@@ -163,33 +153,46 @@ function serializeHosts(hosts: HostRow[]): string {
         host.ablecubePn ?? "",
         host.scvm ?? "",
         host.scvmCn ?? "",
+        host.storageIp ?? "",
     ].join(",")).join("\n");
 }
 
-function parseVolumeGroups(value: string): Array<{ vg_name: string; lv_name: string }> {
-    return splitLines(value).map((line) => {
-        const separator = line.includes("/") && !line.includes(",") ? "/" : ",";
-        const [vgName, lvName] = line.split(separator).map((field) => field.trim());
+function vmHosts(hostsText: string): string {
+    const hosts = parseHosts(hostsText);
 
-        return {
-            vg_name: vgName ?? "",
-            lv_name: lvName ?? "",
-        };
-    })
-            .filter((item) => item.vg_name && item.lv_name);
+    if (hosts.length === 0) {
+        return DEFAULT_HOSTS;
+    }
+
+    return serializeHosts(hosts.map((host, index) => ({
+        ...host,
+        index: host.index || String(index + 1),
+        hostname: ["", "localhost"].includes(host.hostname)
+            ? `ablecube${index + 1}`
+            : host.hostname,
+    })));
 }
 
-function readFileAsBase64(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
+function hciHosts(hostsText: string): string {
+    const current = parseHosts(hostsText);
+    const hosts = Array.from({ length: Math.max(3, current.length) }, (_value, index) => {
+        const existing = current[index];
+        const defaultHostname = `ablecube${index + 1}`;
 
-        reader.onload = () => {
-            const result = typeof reader.result === "string" ? reader.result : "";
-            resolve(result.includes(",") ? result.split(",")[1] : result);
+        if (!existing) {
+            return { index: String(index + 1), hostname: defaultHostname, ablecube: "" };
+        }
+
+        return {
+            ...existing,
+            index: String(index + 1),
+            hostname: ["", "localhost", "hostname", "hostname1", "hostname2", "hostname3"].includes(existing.hostname)
+                ? defaultHostname
+                : existing.hostname,
         };
-        reader.onerror = () => reject(reader.error ?? new Error("파일을 읽을 수 없습니다."));
-        reader.readAsDataURL(file);
     });
+
+    return serializeHosts(hosts);
 }
 
 function flowStepsFor(productType: ProductType): FlowStep[] {
@@ -200,23 +203,17 @@ function flowStepsFor(productType: ProductType): FlowStep[] {
 
     return [
         {
-            id: "license",
-            label: "라이센스 등록",
-            description: "선택한 라이센스 파일 또는 마스터 노드의 기존 라이센스를 전체 대상에 배포합니다.",
-            deploySteps: ["license_apply"],
-        },
-        {
             id: "cluster",
             label: "클러스터 구성 준비",
-            description: "제품 타입, host 목록, 관리 네트워크와 PCS 대상 정보를 검증합니다.",
+            description: "클러스터 종류, 클러스터 구성 프로파일, 관리 네트워크와 PCS 대상 정보를 검증합니다.",
             deploySteps: ["cluster_apply"],
         },
         ...(usesStorageCenter
             ? [
                 {
                     id: "scvm",
-                    label: "스토리지 VM 구성",
-                    description: "host별 SCVM 리소스, 디스크 passthrough, 네트워크 bridge 값을 검증합니다.",
+                    label: "스토리지센터 VM 설정",
+                    description: "호스트별 SCVM 리소스, 디스크 Passthrough, 네트워크 Bridge 값을 검증합니다.",
                     deploySteps: ["scvm_prepare"],
                 },
                 {
@@ -229,7 +226,7 @@ function flowStepsFor(productType: ProductType): FlowStep[] {
                     id: "storage_cluster",
                     label: "스토리지 클러스터 상세 구성",
                     description: "SCVM host 등록, OSD 등록, rbd pool 복제/PG autoscale 구성 흐름을 확인합니다.",
-                    deploySteps: [],
+                    deploySteps: ["scvm_bootstrap"],
                 }
             ]
             : []),
@@ -248,7 +245,7 @@ function flowStepsFor(productType: ProductType): FlowStep[] {
                 {
                     id: "gfs_storage",
                     label: "GFS 스토리지 구성",
-                    description: "외부 스토리지 기반 GFS 대상 디스크, VG/LV, mount point 값을 검증합니다.",
+                    description: "외부 스토리지 기반 GFS 대상 디스크를 선택하고 구성을 준비합니다.",
                     deploySteps: ["storage_prepare"],
                 }
             ]
@@ -265,28 +262,28 @@ function flowStepsFor(productType: ProductType): FlowStep[] {
             : []),
         {
             id: "ccvm",
-            label: "클라우드 VM 구성",
-            description: "CCVM 리소스, 관리 bridge, 선택적 service network 값을 검증합니다.",
+            label: "클라우드센터 VM 설정",
+            description: "CCVM 리소스, 관리네트워크와 선택적 서비스네트워크 값을 검증합니다.",
             deploySteps: ["ccvm_prepare"],
         },
         {
             id: "cloud_center",
             label: "클라우드센터 구성",
-            description: "CCVM bootstrap 실행과 CloudStack 서비스 준비 상태를 확인합니다.",
+            description: "CCVM bootstrap 실행과 Mold 서비스 준비 상태를 확인합니다.",
             deploySteps: ["ccvm_bootstrap"],
         },
         {
             id: "monitoring_connect",
             label: "모니터링센터 연결",
             description: "입력값을 최종 검증한 뒤 올인원 구성 Job을 시작하고, 완료 후 모니터링센터 연결로 이어갑니다.",
-            deploySteps: ["system_profile"],
+            deploySteps: ["monitoring_prepare", "system_profile"],
         },
     ];
 }
 
 function deployOnlyStepsFor(productType: ProductType): string[] {
     const commonHead = ["license_apply", "cluster_apply"];
-    const commonTail = ["ccvm_prepare", "ccvm_bootstrap", "system_profile"];
+    const commonTail = ["ccvm_prepare", "ccvm_bootstrap", "monitoring_prepare", "system_profile"];
 
     switch (productType) {
     case "ablestack-hci":
@@ -342,8 +339,6 @@ function isFlowStepComplete(step: FlowStep, productType: ProductType, status: De
     const raw = status.raw;
 
     switch (step.id) {
-    case "license":
-        return isTrueStatus(raw.licenseStatus);
     case "cluster":
         return isTrueStatus(raw.clusterConfigStatus);
     case "scvm":
@@ -472,17 +467,12 @@ export default function AllInOneControlModal({
 }: AllInOneControlModalProps) {
     const [activeStep, setActiveStep] = React.useState(0);
     const [productType, setProductType] = React.useState<ProductType>(initialProductType(deployStatus));
-    const [licenseFile, setLicenseFile] = React.useState<File | null>(null);
-    const [licenseFilename, setLicenseFilename] = React.useState("license.lic");
-    const [updateSystemProfile, setUpdateSystemProfile] = React.useState(true);
-    const [ccvmIp, setCcvmIp] = React.useState("10.10.31.10");
-    const [mngtCidr, setMngtCidr] = React.useState("16");
-    const [mngtGw, setMngtGw] = React.useState("10.10.0.1");
-    const [mngtDns, setMngtDns] = React.useState("8.8.8.8");
-    const [externalTimeServer, setExternalTimeServer] = React.useState("time.google.com");
-    const [currentHostIp, setCurrentHostIp] = React.useState("");
+    const [ccvmIp, setCcvmIp] = React.useState("");
+    const [mngtCidr, setMngtCidr] = React.useState("");
+    const [mngtGw, setMngtGw] = React.useState("");
+    const [mngtDns, setMngtDns] = React.useState("");
+    const [externalTimeServer, setExternalTimeServer] = React.useState("");
     const [iscsiStorage, setIscsiStorage] = React.useState(false);
-    const [pcsClusterListText, setPcsClusterListText] = React.useState("10.10.31.1");
     const [hostsText, setHostsText] = React.useState(DEFAULT_HOSTS);
     const [scvmCpu, setScvmCpu] = React.useState("8");
     const [scvmMemory, setScvmMemory] = React.useState("32");
@@ -491,17 +481,22 @@ export default function AllInOneControlModal({
     const [scvmStorageMode, setScvmStorageMode] = React.useState("bridge");
     const [scvmServerBridge, setScvmServerBridge] = React.useState("");
     const [scvmReplicationBridge, setScvmReplicationBridge] = React.useState("");
-    const [scvmByHostText, setScvmByHostText] = React.useState(DEFAULT_SCVM_BY_HOST);
+    const [scvmDisksByHost, setScvmDisksByHost] = React.useState<Record<string, string[]>>({});
     const [gfsDisksText, setGfsDisksText] = React.useState("");
     const [gfsDiskOptions, setGfsDiskOptions] = React.useState<DiskInventoryOption[]>([]);
     const [gfsDiskLoadState, setGfsDiskLoadState] = React.useState<InventoryLoadState>("idle");
     const [gfsDiskLoadError, setGfsDiskLoadError] = React.useState("");
-    const [volumeGroupsText, setVolumeGroupsText] = React.useState("vg_glue,lv_glue");
     const [gfsMountPoint, setGfsMountPoint] = React.useState("/mnt/glue-gfs");
     const [rbdPoolName, setRbdPoolName] = React.useState("rbd");
     const [rbdImagePrefix, setRbdImagePrefix] = React.useState("gfs");
     const [rbdSizeGiB, setRbdSizeGiB] = React.useState("5000");
-    const [localDisksText, setLocalDisksText] = React.useState("/dev/sdb");
+    const [ipmiAddresses, setIpmiAddresses] = React.useState<Record<string, string>>({});
+    const [ipmiUsername, setIpmiUsername] = React.useState("");
+    const [ipmiPassword, setIpmiPassword] = React.useState("");
+    const [localDisks, setLocalDisks] = React.useState<string[]>([]);
+    const [storageDiskOptions, setStorageDiskOptions] = React.useState<DiskInventoryOption[]>([]);
+    const [storageDiskLoadState, setStorageDiskLoadState] = React.useState<InventoryLoadState>("idle");
+    const [storageDiskLoadError, setStorageDiskLoadError] = React.useState("");
     const [ccvmCpu, setCcvmCpu] = React.useState("8");
     const [ccvmMemory, setCcvmMemory] = React.useState("32");
     const [ccvmMgmtBridge, setCcvmMgmtBridge] = React.useState("");
@@ -510,11 +505,10 @@ export default function AllInOneControlModal({
     const [nicLoadState, setNicLoadState] = React.useState<InventoryLoadState>("idle");
     const [nicLoadError, setNicLoadError] = React.useState("");
     const [serviceNetworkEnabled, setServiceNetworkEnabled] = React.useState(false);
-    const [serviceNic, setServiceNic] = React.useState("");
     const [serviceIp, setServiceIp] = React.useState("");
-    const [servicePrefix, setServicePrefix] = React.useState("16");
-    const [serviceGw, setServiceGw] = React.useState("");
-    const [serviceDns, setServiceDns] = React.useState("");
+    const [serviceCidr, setServiceCidr] = React.useState("");
+    const [serviceGateway, setServiceGateway] = React.useState("");
+    const [pcsNodeIpSource, setPcsNodeIpSource] = React.useState<"ablecube" | "ablecubePn">("ablecubePn");
     const [phase, setPhase] = React.useState<RunPhase>("idle");
     const [message, setMessage] = React.useState("");
     const [connectionNotice, setConnectionNotice] = React.useState("");
@@ -525,11 +519,10 @@ export default function AllInOneControlModal({
     const isHci = productType === "ablestack-hci" || productType === "ablestack-hci-filesystem";
     const usesHciFilesystem = productType === "ablestack-hci-filesystem";
     const usesExternalGfs = productType === "ablestack-vm";
-    const usesGfsMount = usesExternalGfs || usesHciFilesystem;
     const usesLocal = productType === "ablestack-standalone";
     const cloudCenterWaitText = productType === "ablestack-vm"
-        ? "CloudStack 서비스 준비까지 보통 5~10분 정도 걸립니다."
-        : "CloudStack 서비스 준비까지 보통 20분 정도 걸립니다.";
+        ? "Mold 서비스 준비까지 보통 5~10분 정도 걸립니다."
+        : "Mold 서비스 준비까지 보통 20분 정도 걸립니다.";
     const flowSteps = flowStepsFor(productType);
     const activeFlowStep = flowSteps[activeStep] ?? flowSteps[0];
     const restartRecommendation = restartRecommendationFor(productType, deployStatus, runningJob);
@@ -549,46 +542,17 @@ export default function AllInOneControlModal({
         const nextRecommendation = restartRecommendationFor(nextProductType, deployStatus);
 
         setProductType(nextProductType);
+        if (nextProductType === "ablestack-vm") {
+            setHostsText(vmHosts);
+        } else if (nextProductType === "ablestack-hci" || nextProductType === "ablestack-hci-filesystem") {
+            setHostsText(hciHosts);
+        }
         setActiveStep(nextRecommendation.index);
         setPhase("idle");
         setMessage("");
         setConnectionNotice("");
         setRunningJob(null);
         setRunningJobId("");
-        fetchCurrentHostIp()
-                .then((hostIp) => {
-                    if (!hostIp) return;
-                    setCurrentHostIp(hostIp);
-                    setExternalTimeServer((prev) => (
-                        !prev.trim() || prev.trim() === "time.google.com" ? hostIp : prev
-                    ));
-                    setHostsText((prev) => {
-                        const rows = parseHosts(prev);
-
-                        if (rows[0] && (!rows[0].ablecube || rows[0].ablecube === "10.10.31.1")) {
-                            rows[0] = { ...rows[0], ablecube: hostIp };
-                            return serializeHosts(rows);
-                        }
-
-                        return prev;
-                    });
-                })
-                .catch(() => undefined);
-        fetchCurrentHostname()
-                .then((hostname) => {
-                    if (!hostname) return;
-                    setHostsText((prev) => {
-                        const rows = parseHosts(prev);
-
-                        if (rows[0] && (!rows[0].hostname || rows[0].hostname === "ablecube1")) {
-                            rows[0] = { ...rows[0], hostname };
-                            return serializeHosts(rows);
-                        }
-
-                        return prev;
-                    });
-                })
-                .catch(() => undefined);
     }, [isOpen, deployStatus]);
 
     React.useEffect(() => {
@@ -632,7 +596,9 @@ export default function AllInOneControlModal({
                     if (!isActive) return;
                     setGfsDiskOptions(options);
                     setGfsDisksText((prev) => {
-                        const selected = splitList(prev).filter((disk) => options.some((option) => option.value === disk));
+                        const selected = splitList(prev).filter((disk) => (
+                            options.some((option) => option.value === disk && !option.inUse)
+                        ));
 
                         if (selected.length > 0) {
                             return selected.join("\n");
@@ -650,10 +616,52 @@ export default function AllInOneControlModal({
                     setGfsDiskLoadError(errorMessage(error) || "GFS 디스크 목록을 불러오지 못했습니다.");
                 });
 
+        setStorageDiskLoadState("loading");
+        setStorageDiskLoadError("");
+        fetchDiskInventory("list")
+                .then((options) => {
+                    if (!isActive) return;
+                    const hasMultipath = options.some((disk) => ["mpath", "multipath"].includes(disk.type.toLowerCase()));
+                    const passthroughDisks = options.filter((disk) => {
+                        const type = disk.type.toLowerCase();
+
+                        if (hasMultipath && type === "disk") return false;
+                        return !type || ["disk", "lun", "mpath", "multipath"].includes(type);
+                    });
+
+                    setStorageDiskOptions(passthroughDisks);
+                    setStorageDiskLoadState("success");
+                })
+                .catch((error) => {
+                    if (!isActive) return;
+                    setStorageDiskOptions([]);
+                    setStorageDiskLoadState("error");
+                    setStorageDiskLoadError(errorMessage(error) || "스토리지 디스크 목록을 불러오지 못했습니다.");
+                });
+
         return () => {
             isActive = false;
         };
     }, [isOpen]);
+
+    React.useEffect(() => {
+        if (!isHci || storageDiskOptions.length === 0) return;
+
+        const availableDisks = storageDiskOptions.map((disk) => disk.value);
+
+        setScvmDisksByHost((previous) => {
+            const next = { ...previous };
+            let changed = false;
+
+            parseHosts(hostsText).forEach((host) => {
+                if (!host.hostname || Object.prototype.hasOwnProperty.call(next, host.hostname)) return;
+                next[host.hostname] = availableDisks;
+                changed = true;
+            });
+
+            return changed ? next : previous;
+        });
+    }, [hostsText, isHci, storageDiskOptions]);
 
     React.useEffect(() => {
         if (activeStep > flowSteps.length - 1) {
@@ -694,11 +702,9 @@ export default function AllInOneControlModal({
     const updateProductType = (nextType: ProductType) => {
         setProductType(nextType);
         setActiveStep(restartRecommendationFor(nextType, deployStatus).index);
-        if (nextType === "ablestack-standalone") {
-            setPcsClusterListText("");
-        } else if (!pcsClusterListText.trim()) {
-            setPcsClusterListText("10.10.31.1");
-        }
+        if (nextType !== "ablestack-vm") setIscsiStorage(false);
+        if (nextType === "ablestack-vm") setHostsText(vmHosts);
+        if (nextType === "ablestack-hci" || nextType === "ablestack-hci-filesystem") setHostsText(hciHosts);
     };
 
     const updateHosts = (nextHosts: HostRow[]) => {
@@ -729,6 +735,7 @@ export default function AllInOneControlModal({
                 ablecubePn: "",
                 scvm: "",
                 scvmCn: "",
+                storageIp: "",
             },
         ]);
     };
@@ -739,25 +746,6 @@ export default function AllInOneControlModal({
 
         if (hosts.length <= minHosts) return;
         updateHosts(hosts.slice(0, -1));
-    };
-
-    const updatePcsItem = (index: number, value: string) => {
-        const items = splitList(pcsClusterListText);
-
-        items[index] = value;
-        setPcsClusterListText(items.join("\n"));
-    };
-
-    const addPcsItem = () => {
-        setPcsClusterListText([...splitList(pcsClusterListText), ""].join("\n"));
-    };
-
-    const removePcsItem = () => {
-        const minItems = isHci ? 3 : 1;
-        const items = splitList(pcsClusterListText);
-
-        if (items.length <= minItems) return;
-        setPcsClusterListText(items.slice(0, -1).join("\n"));
     };
 
     const parseSCVMByHost = () => {
@@ -772,18 +760,11 @@ export default function AllInOneControlModal({
         };
         const out: Record<string, unknown> = {};
 
-        splitLines(scvmByHostText).forEach((line) => {
-            const [rawKey, rawValue] = line.includes("=")
-                ? line.split(/=(.*)/s)
-                : [
-                    line.split(",")[0], line.split(",").slice(1)
-                            .join(",")
-                ];
-            const key = rawKey.trim();
-            const disks = splitList(rawValue ?? "");
+        parseHosts(hostsText).forEach((host) => {
+            if (!host.hostname) return;
+            const disks = scvmDisksByHost[host.hostname] ?? [];
 
-            if (!key) return;
-            out[key] = {
+            out[host.hostname] = {
                 ...shared,
                 ...(scvmDiskType === "raid_passthrough" ? { raid_passthrough_list: disks } : {}),
                 ...(scvmDiskType === "lun_passthrough" ? { lun_passthrough_list: disks } : {}),
@@ -802,12 +783,14 @@ export default function AllInOneControlModal({
                     index: host.index,
                     hostname: host.hostname,
                     ablecube: host.ablecube,
+                    ...(productType === "ablestack-vm" && iscsiStorage
+                        ? { ablecubePn: host.storageIp ?? "" }
+                        : {}),
                 }
         ));
         const payload: Record<string, unknown> = {
             mode: "all",
             only: deployOnlyStepsFor(productType),
-            update_system_profile: updateSystemProfile,
             cluster: {
                 action: "insert",
                 option: "hostOnly",
@@ -820,7 +803,9 @@ export default function AllInOneControlModal({
                 },
                 external_timeserver: externalTimeServer.trim(),
                 storage_network: String(iscsiStorage),
-                pcs_cluster_list: splitList(pcsClusterListText),
+                pcs_cluster_list: usesLocal
+                    ? []
+                    : hosts.map((host) => (isHci ? host[pcsNodeIpSource] : host.ablecube)).filter(Boolean),
                 hosts,
             },
             ccvm_xml: {
@@ -828,15 +813,9 @@ export default function AllInOneControlModal({
                 memory: Number(ccvmMemory) || 32,
                 management_network_bridge: ccvmMgmtBridge.trim(),
                 ...(ccvmServiceBridge.trim() ? { service_network_bridge: ccvmServiceBridge.trim() } : {}),
-                ...(usesGfsMount ? { gfs_mount_point: gfsMountPoint.trim() } : {}),
             },
             ccvm_lifecycle: { action: "setup" },
         };
-
-        if (licenseFile) {
-            payload.license_content = await readFileAsBase64(licenseFile);
-            payload.license_filename = licenseFilename.trim() || licenseFile.name || "license.lic";
-        }
 
         if (isHci) {
             payload.scvm_by_host = parseSCVMByHost();
@@ -846,8 +825,13 @@ export default function AllInOneControlModal({
             payload.gfs = {
                 action: "init-pcs-cluster",
                 disks: splitList(gfsDisksText),
-                mount_point: gfsMountPoint.trim(),
-                volume_groups: parseVolumeGroups(volumeGroupsText),
+                stonith: hosts.map((host) => ({
+                    hostname: host.hostname,
+                    ipaddr: ipmiAddresses[host.hostname]?.trim() ?? "",
+                    ipport: "623",
+                    login: ipmiUsername.trim(),
+                    passwd: ipmiPassword,
+                })),
             };
         }
 
@@ -855,7 +839,13 @@ export default function AllInOneControlModal({
             payload.gfs = {
                 action: "init-pcs-cluster",
                 mount_point: gfsMountPoint.trim(),
-                volume_groups: parseVolumeGroups(volumeGroupsText),
+                stonith: hosts.map((host) => ({
+                    hostname: host.hostname,
+                    ipaddr: ipmiAddresses[host.hostname]?.trim() ?? "",
+                    ipport: "623",
+                    login: ipmiUsername.trim(),
+                    passwd: ipmiPassword,
+                })),
             };
             payload.rbd = {
                 action: "create",
@@ -869,19 +859,20 @@ export default function AllInOneControlModal({
         if (usesLocal) {
             payload.local = {
                 action: "create-local-disk",
-                disks: splitList(localDisksText),
+                disks: localDisks,
             };
         }
 
         if (serviceNetworkEnabled) {
             payload.ccvm_cloudinit = {
-                ...(serviceNic.trim() ? { sn_nic: serviceNic.trim() } : {}),
+                ...(ccvmServiceBridge.trim() ? { sn_nic: ccvmServiceBridge.trim() } : {}),
                 ...(serviceIp.trim() ? { sn_ip: serviceIp.trim() } : {}),
-                ...(servicePrefix.trim() ? { sn_prefix: Number(servicePrefix) || 16 } : {}),
-                ...(serviceGw.trim() ? { sn_gw: serviceGw.trim() } : {}),
-                ...(serviceDns.trim() ? { sn_dns: serviceDns.trim() } : {}),
+                ...(serviceCidr.trim() ? { sn_prefix: Number(serviceCidr) } : {}),
+                ...(serviceGateway.trim() ? { sn_gw: serviceGateway.trim() } : {}),
             };
         }
+
+        payload.monitoring = { action: "configure" };
 
         return payload;
     };
@@ -890,31 +881,38 @@ export default function AllInOneControlModal({
         const hosts = parseHosts(hostsText);
 
         if (stepId === "cluster") {
-            if (!ccvmIp.trim()) return "클라우드센터 VM IP를 입력해주세요.";
-            if (!mngtCidr.trim()) return "관리 네트워크 CIDR을 입력해주세요.";
+            if (!ccvmIp.trim()) return "CCVM 관리 IP를 입력해주세요.";
+            if (!mngtCidr.trim()) return "관리 NIC CIDR을 입력해주세요.";
             if (hosts.length < (isHci ? 3 : 1)) {
-                return isHci ? "HCI 구성은 host를 3대 이상 입력해야 합니다." : "host를 1대 이상 입력해야 합니다.";
+                return isHci ? "HCI 구성은 호스트를 3대 이상 입력해야 합니다." : "호스트를 1대 이상 입력해야 합니다.";
             }
             if (hosts.some((host) => !host.index || !host.hostname || !host.ablecube)) {
-                return "host 입력은 index, hostname, ablecube IP가 모두 필요합니다.";
+                return "클러스터 구성 프로파일에는 순번, 호스트명, 호스트 IP가 모두 필요합니다.";
             }
-            if (!usesLocal && splitList(pcsClusterListText).length < (isHci ? 3 : 1)) {
-                return isHci ? "HCI 구성은 PCS 클러스터 IP를 3개 이상 입력해야 합니다." : "PCS 클러스터 IP를 1개 이상 입력해주세요.";
+            if (productType === "ablestack-vm" && iscsiStorage && hosts.some((host) => !host.storageIp)) {
+                return "스토리지 네트워크 전용 구성은 호스트별 스토리지 전용 IP가 필요합니다.";
+            }
+            if (isHci && hosts.some((host) => !host[pcsNodeIpSource])) {
+                return pcsNodeIpSource === "ablecube"
+                    ? "PCS 노드 주소로 사용할 호스트 IP가 필요합니다."
+                    : "PCS 노드 주소로 사용할 호스트 PN IP가 필요합니다.";
             }
         }
 
         if (stepId === "scvm") {
             if (nicLoadState === "error") return `NIC 정보를 확인해주세요. ${nicLoadError}`;
-            if (!scvmMgmtBridge.trim()) return "SCVM 관리 Bridge를 입력해주세요.";
-            if (Object.keys(parseSCVMByHost()).length < hosts.length) {
-                return "SCVM host별 디스크 설정을 host 수만큼 입력해주세요.";
+            if (storageDiskLoadState === "error") return `스토리지 디스크 정보를 확인해주세요. ${storageDiskLoadError}`;
+            if (!scvmMgmtBridge.trim()) return "관리 NIC용 Bridge를 선택해주세요.";
+            if (hosts.some((host) => (scvmDisksByHost[host.hostname] ?? []).length === 0)) {
+                return "모든 호스트의 디스크 구성 대상 장치를 하나 이상 선택해주세요.";
             }
         }
 
         if (stepId === "gfs_storage") {
-            if (gfsDiskLoadState === "error") return `GFS 디스크 정보를 확인해주세요. ${gfsDiskLoadError}`;
-            if (splitList(gfsDisksText).length === 0) return "GFS 구성 대상 디스크를 입력해주세요.";
-            if (parseVolumeGroups(volumeGroupsText).length === 0) return "GFS VG/LV 쌍을 입력해주세요.";
+            if (gfsDiskLoadState === "error") return `GFS용 디스크 구성 대상 장치를 확인해주세요. ${gfsDiskLoadError}`;
+            if (splitList(gfsDisksText).length === 0) return "GFS용 디스크 구성 대상 장치를 선택해주세요.";
+            if (hosts.some((host) => !ipmiAddresses[host.hostname]?.trim())) return "모든 호스트의 IPMI IP를 입력해주세요.";
+            if (!ipmiUsername.trim() || !ipmiPassword) return "IPMI 아이디와 비밀번호를 입력해주세요.";
         }
 
         if (stepId === "hci_shared_file") {
@@ -922,17 +920,24 @@ export default function AllInOneControlModal({
             if (!rbdImagePrefix.trim()) return "RBD image prefix를 입력해주세요.";
             if (!Number.isFinite(Number(rbdSizeGiB)) || Number(rbdSizeGiB) <= 0) return "RBD 총 용량 GiB를 입력해주세요.";
             if (!gfsMountPoint.trim()) return "GFS mount point를 입력해주세요.";
-            if (parseVolumeGroups(volumeGroupsText).length === 0) return "GFS VG/LV 쌍을 입력해주세요.";
+            if (hosts.some((host) => !ipmiAddresses[host.hostname]?.trim())) return "모든 호스트의 IPMI IP를 입력해주세요.";
+            if (!ipmiUsername.trim() || !ipmiPassword) return "IPMI 아이디와 비밀번호를 입력해주세요.";
         }
 
         if (stepId === "local_storage") {
-            if (usesLocal && splitList(localDisksText).length === 0) return "로컬 스토리지 대상 디스크를 입력해주세요.";
+            if (storageDiskLoadState === "error") return `스토리지 디스크 정보를 확인해주세요. ${storageDiskLoadError}`;
+            if (usesLocal && localDisks.length === 0) return "로컬 스토리지 대상 디스크를 선택해주세요.";
         }
 
         if (stepId === "ccvm") {
             if (nicLoadState === "error") return `NIC 정보를 확인해주세요. ${nicLoadError}`;
-            if (!ccvmMgmtBridge.trim()) return "CCVM 관리 Bridge를 입력해주세요.";
-            if (usesGfsMount && !gfsMountPoint.trim()) return "GFS mount point를 입력해주세요.";
+            if (!ccvmMgmtBridge.trim()) return "관리네트워크를 선택해주세요.";
+            if (serviceNetworkEnabled && (!ccvmServiceBridge.trim() || !serviceIp.trim() || !serviceCidr.trim() || !serviceGateway.trim())) {
+                return "서비스네트워크는 Bridge, IP, CIDR, Gateway를 모두 입력해주세요.";
+            }
+            if (serviceNetworkEnabled && (!Number.isFinite(Number(serviceCidr)) || Number(serviceCidr) <= 0)) {
+                return "서비스 NIC CIDR은 유효한 prefix 길이로 입력해주세요.";
+            }
         }
 
         return "";
@@ -1041,70 +1046,107 @@ export default function AllInOneControlModal({
         }
     };
 
-    const renderLicenseStep = () => (
-        <Form className="ct-all-in-one-form" isHorizontal>
-            <FormGroup
-              label="제품 타입" isRequired
-              fieldId="all-in-one-product-type"
-            >
-                <FormSelect
-                  id="all-in-one-product-type"
-                  value={productType}
-                  onChange={(_event, value) => updateProductType(value as ProductType)}
-                >
-                    {PRODUCT_OPTIONS.map((option) => (
-                        <FormSelectOption
-                          key={option.value} value={option.value}
-                          label={option.label}
-                        />
-                    ))}
-                </FormSelect>
-            </FormGroup>
-            <FormGroup label="라이센스 파일" fieldId="all-in-one-license-file">
-                <input
-                  id="all-in-one-license-file"
-                  type="file"
-                  className="ct-all-in-one-file-input"
-                  onChange={(event) => {
-                      const file = event.currentTarget.files?.[0] ?? null;
-
-                      setLicenseFile(file);
-                      setLicenseFilename(file?.name ?? "license.lic");
-                  }}
-                />
-            </FormGroup>
-            <FormGroup label="저장 파일명" fieldId="all-in-one-license-filename">
-                <TextInput
-                  id="all-in-one-license-filename"
-                  value={licenseFilename}
-                  onChange={(_event, value) => setLicenseFilename(value)}
-                />
-            </FormGroup>
-            <Checkbox
-              id="all-in-one-update-profile"
-              label="성공한 단계의 systemProfile 상태를 자동 반영"
-              isChecked={updateSystemProfile}
-              onChange={(_event, checked) => setUpdateSystemProfile(checked)}
-            />
-            <Alert
-              variant="info"
-              isInline
-              title="라이센스 파일을 선택하지 않으면 마스터 노드에 이미 등록된 라이센스를 사용합니다."
-            />
-        </Form>
-    );
-
     const renderClusterStep = () => {
         const hostRows = parseHosts(hostsText);
-        const pcsItems = splitList(pcsClusterListText);
         const minHosts = isHci ? 3 : 1;
-        const minPcsItems = isHci ? 3 : 1;
 
         return (
             <div className="ct-all-in-one-cluster">
-                <Form className="ct-all-in-one-form ct-all-in-one-form--compact" isHorizontal>
+                <Form className="ct-all-in-one-form ct-all-in-one-form--compact ct-all-in-one-product-form" isHorizontal>
                     <FormGroup
-                      label="클라우드센터 VM IP" isRequired
+                      label="클러스터 종류" isRequired
+                      fieldId="all-in-one-product-type"
+                    >
+                        <FormSelect
+                          id="all-in-one-product-type"
+                          value={productType}
+                          onChange={(_event, value) => updateProductType(value as ProductType)}
+                        >
+                            {PRODUCT_OPTIONS.map((option) => (
+                                <FormSelectOption key={option.value} value={option.value} label={option.label} />
+                            ))}
+                        </FormSelect>
+                    </FormGroup>
+                </Form>
+
+                <div className="ct-all-in-one-table-wrap">
+                    <div className="ct-all-in-one-field-card__header">
+                        <strong>클러스터 구성 프로파일</strong>
+                        <div className="ct-all-in-one-host-actions">
+                            {productType === "ablestack-vm" && (
+                                <Checkbox
+                                  id="all-in-one-iscsi-storage"
+                                  label="스토리지 네트워크 전용"
+                                  isChecked={iscsiStorage}
+                                    onChange={(_event, checked) => setIscsiStorage(checked)}
+                                />
+                            )}
+                            {isHci && (
+                                <label className="ct-all-in-one-node-ip-source" htmlFor="all-in-one-pcs-node-ip-source">
+                                    <span>노드 IP 기준</span>
+                                    <FormSelect
+                                      id="all-in-one-pcs-node-ip-source"
+                                      value={pcsNodeIpSource}
+                                      onChange={(_event, value) => setPcsNodeIpSource(value as "ablecube" | "ablecubePn")}
+                                    >
+                                        <FormSelectOption value="ablecube" label="Ablecube IP (관리망)" />
+                                        <FormSelectOption value="ablecubePn" label="HOST PN (HPN)" />
+                                    </FormSelect>
+                                </label>
+                            )}
+                            <div className="ct-all-in-one-stepper">
+                                <Button
+                                  variant="control"
+                                  onClick={removeHost}
+                                  isDisabled={hostRows.length <= minHosts}
+                                  aria-label="호스트 제거"
+                                >
+                                    -
+                                </Button>
+                                <div className="ct-all-in-one-stepper__value">{hostRows.length}</div>
+                                <Button variant="control" onClick={addHost} aria-label="호스트 추가">+</Button>
+                                <span>대</span>
+                            </div>
+                        </div>
+                    </div>
+                    {isHci && (
+                        <p className="ct-all-in-one-help">PCS 클러스터 노드 주소로 사용할 IP 항목을 선택합니다.</p>
+                    )}
+                    <table className="ct-all-in-one-table">
+                        <thead>
+                            <tr>
+                                <th>순번</th>
+                                <th>호스트명</th>
+                                <th>호스트 IP</th>
+                                {iscsiStorage && productType === "ablestack-vm" && <th>스토리지 전용 IP</th>}
+                                {isHci && <th>SCVM MNGT IP</th>}
+                                {isHci && <th>호스트 PN IP</th>}
+                                {isHci && <th>SCVM PN IP</th>}
+                                {isHci && <th>SCVM CN IP</th>}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {hostRows.map((row, index) => (
+                                <tr key={`all-in-one-host-${index}`}>
+                                    <td><TextInput aria-label={`호스트 순번 ${index + 1}`} value={row.index} onChange={(_event, value) => updateHost(index, "index", value)} /></td>
+                                    <td><TextInput aria-label={`호스트명 ${index + 1}`} value={row.hostname} onChange={(_event, value) => updateHost(index, "hostname", value)} /></td>
+                                    <td><TextInput aria-label={`호스트 IP ${index + 1}`} value={row.ablecube} onChange={(_event, value) => updateHost(index, "ablecube", value)} /></td>
+                                    {iscsiStorage && productType === "ablestack-vm" && (
+                                        <td><TextInput aria-label={`스토리지 전용 IP ${index + 1}`} value={row.storageIp ?? ""} onChange={(_event, value) => updateHost(index, "storageIp", value)} /></td>
+                                    )}
+                                    {isHci && <td><TextInput aria-label={`SCVM MNGT IP ${index + 1}`} value={row.scvmMngt ?? ""} onChange={(_event, value) => updateHost(index, "scvmMngt", value)} /></td>}
+                                    {isHci && <td><TextInput aria-label={`호스트 PN IP ${index + 1}`} value={row.ablecubePn ?? ""} onChange={(_event, value) => updateHost(index, "ablecubePn", value)} /></td>}
+                                    {isHci && <td><TextInput aria-label={`SCVM PN IP ${index + 1}`} value={row.scvm ?? ""} onChange={(_event, value) => updateHost(index, "scvm", value)} /></td>}
+                                    {isHci && <td><TextInput aria-label={`SCVM CN IP ${index + 1}`} value={row.scvmCn ?? ""} onChange={(_event, value) => updateHost(index, "scvmCn", value)} /></td>}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+
+                <Form className="ct-all-in-one-form ct-all-in-one-form--compact ct-all-in-one-cluster-details" isHorizontal>
+                    <FormGroup
+                      label="CCVM 관리 IP" isRequired
                       fieldId="all-in-one-ccvm-ip"
                     >
                         <TextInput
@@ -1114,7 +1156,7 @@ export default function AllInOneControlModal({
                         />
                     </FormGroup>
                     <FormGroup
-                      label="관리 CIDR" isRequired
+                      label="관리 NIC CIDR" isRequired
                       fieldId="all-in-one-mngt-cidr"
                     >
                         <TextInput
@@ -1123,175 +1165,29 @@ export default function AllInOneControlModal({
                           onChange={(_event, value) => setMngtCidr(value)}
                         />
                     </FormGroup>
-                    <FormGroup label="관리 Gateway" fieldId="all-in-one-mngt-gw">
+                    <FormGroup label="관리 NIC Gateway" fieldId="all-in-one-mngt-gw">
                         <TextInput
                           id="all-in-one-mngt-gw"
                           value={mngtGw}
                           onChange={(_event, value) => setMngtGw(value)}
                         />
                     </FormGroup>
-                    <FormGroup label="관리 DNS" fieldId="all-in-one-mngt-dns">
+                    <FormGroup label="관리 NIC DNS" fieldId="all-in-one-mngt-dns">
                         <TextInput
                           id="all-in-one-mngt-dns"
                           value={mngtDns}
                           onChange={(_event, value) => setMngtDns(value)}
                         />
                     </FormGroup>
-                    <FormGroup label="시간 서버" fieldId="all-in-one-time-server">
+                    <FormGroup label="외부 시간서버" fieldId="all-in-one-time-server">
                         <TextInput
                           id="all-in-one-time-server"
                           value={externalTimeServer}
-                          placeholder={currentHostIp || "현재 호스트 IP"}
+                          placeholder="time.google.com"
                           onChange={(_event, value) => setExternalTimeServer(value)}
                         />
                     </FormGroup>
-                    <Checkbox
-                      id="all-in-one-iscsi-storage"
-                      label="스토리지 네트워크 전용"
-                      isChecked={iscsiStorage}
-                      onChange={(_event, checked) => setIscsiStorage(checked)}
-                    />
                 </Form>
-
-                {!usesLocal && (
-                    <div className="ct-all-in-one-field-card">
-                        <div className="ct-all-in-one-field-card__header">
-                            <strong>PCS 클러스터 IP</strong>
-                            <div className="ct-all-in-one-stepper">
-                                <Button
-                                  variant="control"
-                                  onClick={removePcsItem}
-                                  isDisabled={pcsItems.length <= minPcsItems}
-                                  aria-label="PCS IP 제거"
-                                >
-                                    -
-                                </Button>
-                                <div className="ct-all-in-one-stepper__value">{pcsItems.length}</div>
-                                <Button
-                                  variant="control"
-                                  onClick={addPcsItem}
-                                  aria-label="PCS IP 추가"
-                                >
-                                    +
-                                </Button>
-                                <span>개</span>
-                            </div>
-                        </div>
-                        <div className="ct-all-in-one-pcs-grid">
-                            {pcsItems.map((ip, index) => (
-                                <div key={`all-in-one-pcs-${index}`} className="ct-all-in-one-pcs-item">
-                                    <span>#{index + 1}</span>
-                                    <TextInput
-                                      aria-label={`PCS 클러스터 IP ${index + 1}`}
-                                      value={ip}
-                                      onChange={(_event, value) => updatePcsItem(index, value)}
-                                    />
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                <div className="ct-all-in-one-table-wrap">
-                    <div className="ct-all-in-one-field-card__header">
-                        <strong>Host 목록</strong>
-                        <div className="ct-all-in-one-stepper">
-                            <Button
-                              variant="control"
-                              onClick={removeHost}
-                              isDisabled={hostRows.length <= minHosts}
-                              aria-label="Host 제거"
-                            >
-                                -
-                            </Button>
-                            <div className="ct-all-in-one-stepper__value">{hostRows.length}</div>
-                            <Button
-                              variant="control"
-                              onClick={addHost}
-                              aria-label="Host 추가"
-                            >
-                                +
-                            </Button>
-                            <span>대</span>
-                        </div>
-                    </div>
-                    <table className="ct-all-in-one-table">
-                        <thead>
-                            <tr>
-                                <th>순번</th>
-                                <th>호스트명</th>
-                                <th>Ablecube IP</th>
-                                {isHci && <th>SCVM MNGT</th>}
-                                {isHci && <th>HOST PN</th>}
-                                {isHci && <th>SCVM PN</th>}
-                                {isHci && <th>SCVM CN</th>}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {hostRows.map((row, index) => (
-                                <tr key={`all-in-one-host-${index}`}>
-                                    <td>
-                                        <TextInput
-                                          aria-label={`Host 순번 ${index + 1}`}
-                                          value={row.index}
-                                          onChange={(_event, value) => updateHost(index, "index", value)}
-                                        />
-                                    </td>
-                                    <td>
-                                        <TextInput
-                                          aria-label={`Host 호스트명 ${index + 1}`}
-                                          value={row.hostname}
-                                          onChange={(_event, value) => updateHost(index, "hostname", value)}
-                                        />
-                                    </td>
-                                    <td>
-                                        <TextInput
-                                          aria-label={`Host Ablecube IP ${index + 1}`}
-                                          value={row.ablecube}
-                                          onChange={(_event, value) => updateHost(index, "ablecube", value)}
-                                        />
-                                    </td>
-                                    {isHci && (
-                                        <td>
-                                            <TextInput
-                                              aria-label={`Host SCVM MNGT ${index + 1}`}
-                                              value={row.scvmMngt ?? ""}
-                                              onChange={(_event, value) => updateHost(index, "scvmMngt", value)}
-                                            />
-                                        </td>
-                                    )}
-                                    {isHci && (
-                                        <td>
-                                            <TextInput
-                                              aria-label={`Host PN ${index + 1}`}
-                                              value={row.ablecubePn ?? ""}
-                                              onChange={(_event, value) => updateHost(index, "ablecubePn", value)}
-                                            />
-                                        </td>
-                                    )}
-                                    {isHci && (
-                                        <td>
-                                            <TextInput
-                                              aria-label={`SCVM PN ${index + 1}`}
-                                              value={row.scvm ?? ""}
-                                              onChange={(_event, value) => updateHost(index, "scvm", value)}
-                                            />
-                                        </td>
-                                    )}
-                                    {isHci && (
-                                        <td>
-                                            <TextInput
-                                              aria-label={`SCVM CN ${index + 1}`}
-                                              value={row.scvmCn ?? ""}
-                                              onChange={(_event, value) => updateHost(index, "scvmCn", value)}
-                                            />
-                                        </td>
-                                    )}
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
             </div>
         );
     };
@@ -1318,23 +1214,23 @@ export default function AllInOneControlModal({
               label="CPU" isRequired
               fieldId="all-in-one-scvm-cpu"
             >
-                <TextInput
-                  id="all-in-one-scvm-cpu" value={scvmCpu}
-                  onChange={(_event, value) => setScvmCpu(value)}
-                />
+                <FormSelect id="all-in-one-scvm-cpu" value={scvmCpu} onChange={(_event, value) => setScvmCpu(value)}>
+                    <FormSelectOption value="8" label="8 vCore" />
+                    <FormSelectOption value="16" label="16 vCore" />
+                </FormSelect>
             </FormGroup>
             <FormGroup
-              label="Memory GiB" isRequired
+              label="Memory" isRequired
               fieldId="all-in-one-scvm-memory"
             >
-                <TextInput
-                  id="all-in-one-scvm-memory"
-                  value={scvmMemory}
-                  onChange={(_event, value) => setScvmMemory(value)}
-                />
+                <FormSelect id="all-in-one-scvm-memory" value={scvmMemory} onChange={(_event, value) => setScvmMemory(value)}>
+                    <FormSelectOption value="16" label="16 GiB" />
+                    <FormSelectOption value="32" label="32 GiB" />
+                    <FormSelectOption value="64" label="64 GiB" />
+                </FormSelect>
             </FormGroup>
             <FormGroup
-              label="디스크 방식" isRequired
+              label="디스크 구성 방식" isRequired
               fieldId="all-in-one-scvm-disk-type"
             >
                 <FormSelect
@@ -1342,13 +1238,13 @@ export default function AllInOneControlModal({
                   value={scvmDiskType}
                   onChange={(_event, value) => setScvmDiskType(value)}
                 >
-                    <FormSelectOption value="disk_passthrough" label="Disk passthrough" />
-                    <FormSelectOption value="lun_passthrough" label="LUN passthrough" />
-                    <FormSelectOption value="raid_passthrough" label="RAID passthrough" />
+                    <FormSelectOption value="disk_passthrough" label="PCI Passthrough" />
+                    <FormSelectOption value="lun_passthrough" label="LUN Passthrough" />
+                    <FormSelectOption value="raid_passthrough" label="RAID Passthrough" />
                 </FormSelect>
             </FormGroup>
             <FormGroup
-              label="관리 Bridge" isRequired
+              label="관리 NIC용 Bridge" isRequired
               fieldId="all-in-one-scvm-mgmt-bridge"
             >
                 <FormSelect
@@ -1362,7 +1258,7 @@ export default function AllInOneControlModal({
                 </FormSelect>
             </FormGroup>
             <FormGroup
-              label="스토리지 네트워크 방식" isRequired
+              label="스토리지 NIC 구성 방식" isRequired
               fieldId="all-in-one-scvm-storage-mode"
             >
                 <FormSelect
@@ -1370,12 +1266,12 @@ export default function AllInOneControlModal({
                   value={scvmStorageMode}
                   onChange={(_event, value) => setScvmStorageMode(value)}
                 >
-                    <FormSelectOption value="bridge" label="Bridge" />
-                    <FormSelectOption value="nic_passthrough" label="NIC passthrough" />
-                    <FormSelectOption value="nic_passthrough_bonding" label="NIC passthrough bonding" />
+                    <FormSelectOption value="bridge" label="Bridge Network" />
+                    <FormSelectOption value="nic_passthrough" label="NIC Passthrough" />
+                    <FormSelectOption value="nic_passthrough_bonding" label="NIC Passthrough Bonding" />
                 </FormSelect>
             </FormGroup>
-            <FormGroup label="서버 Bridge" fieldId="all-in-one-scvm-server-bridge">
+            <FormGroup label="서버용 NIC" fieldId="all-in-one-scvm-server-bridge">
                 <FormSelect
                   id="all-in-one-scvm-server-bridge"
                   value={scvmServerBridge}
@@ -1386,7 +1282,7 @@ export default function AllInOneControlModal({
                     ))}
                 </FormSelect>
             </FormGroup>
-            <FormGroup label="복제 Bridge" fieldId="all-in-one-scvm-repl-bridge">
+            <FormGroup label="복제용 NIC" fieldId="all-in-one-scvm-repl-bridge">
                 <FormSelect
                   id="all-in-one-scvm-repl-bridge"
                   value={scvmReplicationBridge}
@@ -1398,19 +1294,43 @@ export default function AllInOneControlModal({
                 </FormSelect>
             </FormGroup>
             <FormGroup
-              label="Host별 디스크" isRequired
+              label="디스크 구성 대상 장치" isRequired
               fieldId="all-in-one-scvm-by-host"
             >
-                <TextArea
-                  id="all-in-one-scvm-by-host"
-                  value={scvmByHostText}
-                  rows={5}
-                  resizeOrientation="vertical"
-                  onChange={(_event, value) => setScvmByHostText(value)}
-                />
-                <Content component="p" className="ct-all-in-one-help">
-                    한 줄에 `hostname=/dev/disk/by-id/...` 형식으로 입력합니다. 여러 디스크는 쉼표로 구분합니다.
-                </Content>
+                {storageDiskLoadState === "loading" ? (
+                    <Alert variant="info" isInline title="디스크 목록을 불러오는 중입니다." />
+                ) : storageDiskLoadState === "error" ? (
+                    <Alert variant="danger" isInline title="디스크 목록을 불러오지 못했습니다.">{storageDiskLoadError}</Alert>
+                ) : storageDiskOptions.length === 0 ? (
+                    <Alert variant="warning" isInline title="선택 가능한 디스크가 없습니다." />
+                ) : (
+                    <div className="ct-all-in-one-host-disk-list">
+                        {parseHosts(hostsText).map((host) => {
+                            const selected = scvmDisksByHost[host.hostname] ?? [];
+
+                            return (
+                                <div key={`all-in-one-scvm-disks-${host.hostname}`} className="ct-all-in-one-host-disk-list__host">
+                                    <strong>{host.hostname || "이름 없는 호스트"}</strong>
+                                    {storageDiskOptions.map((disk) => (
+                                        <Checkbox
+                                          key={`${host.hostname}-${disk.value}`}
+                                          id={`all-in-one-scvm-disk-${host.hostname}-${disk.value}`.replace(/[^a-zA-Z0-9_-]/g, "-")}
+                                          label={disk.label}
+                                          isChecked={selected.includes(disk.value)}
+                                          onChange={(_event, checked) => setScvmDisksByHost((previous) => ({
+                                              ...previous,
+                                              [host.hostname]: checked
+                                                  ? Array.from(new Set([...selected, disk.value]))
+                                                  : selected.filter((value) => value !== disk.value),
+                                          }))}
+                                        />
+                                    ))}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+                <Content component="p" className="ct-all-in-one-help">감지된 Passthrough 디스크가 호스트별로 자동 선택됩니다. 필요한 디스크만 선택 상태를 조정하세요.</Content>
             </FormGroup>
         </Form>
     );
@@ -1483,71 +1403,94 @@ export default function AllInOneControlModal({
         setGfsDisksText(next.join("\n"));
     };
 
-    const renderGfsStorageStep = () => (
-        <Form className="ct-all-in-one-form" isHorizontal>
+    const renderIpmiFields = () => (
+        <>
+            {parseHosts(hostsText).map((host) => (
                 <FormGroup
-                  label="GFS 디스크" isRequired
-                  fieldId="all-in-one-gfs-disks"
-                >
-                    {gfsDiskLoadState === "loading" ? (
-                        <Alert
-                          variant="info"
-                          isInline
-                          title="GFS 디스크 목록을 불러오는 중입니다."
-                        />
-                    ) : gfsDiskLoadState === "error" ? (
-                        <Alert
-                          variant="danger"
-                          isInline
-                          title="GFS 디스크 목록을 불러오지 못했습니다."
-                        >
-                            {gfsDiskLoadError}
-                        </Alert>
-                    ) : gfsDiskOptions.length === 0 ? (
-                        <Alert
-                          variant="warning"
-                          isInline
-                          title="GFS 디스크 후보가 없습니다."
-                        />
-                    ) : (
-                        <div className="ct-all-in-one-choice-list">
-                            {gfsDiskOptions.map((disk) => (
-                                <Checkbox
-                                  key={disk.value}
-                                  id={`all-in-one-gfs-disk-${disk.value.replace(/[^a-zA-Z0-9_-]/g, "-")}`}
-                                  label={disk.label}
-                                  isChecked={selectedGfsDisks.includes(disk.value)}
-                                  onChange={(_event, checked) => toggleGfsDisk(disk.value, checked)}
-                                />
-                            ))}
-                        </div>
-                    )}
-                </FormGroup>
-                <FormGroup
-                  label="VG/LV" isRequired
-                  fieldId="all-in-one-volume-groups"
-                >
-                    <TextArea
-                      id="all-in-one-volume-groups"
-                      value={volumeGroupsText}
-                      rows={4}
-                      resizeOrientation="vertical"
-                      onChange={(_event, value) => setVolumeGroupsText(value)}
-                    />
-                    <Content component="p" className="ct-all-in-one-help">
-                        한 줄에 `vg_glue,lv_glue` 형식으로 입력합니다.
-                    </Content>
-                </FormGroup>
-                <FormGroup
-                  label="Mount point" isRequired
-                  fieldId="all-in-one-gfs-mount"
+                  key={`all-in-one-ipmi-${host.hostname}`}
+                  label={`${host.hostname || "호스트"} IPMI IP`}
+                  isRequired
+                  fieldId={`all-in-one-ipmi-${host.index}`}
                 >
                     <TextInput
-                      id="all-in-one-gfs-mount"
-                      value={gfsMountPoint}
-                      onChange={(_event, value) => setGfsMountPoint(value)}
+                      id={`all-in-one-ipmi-${host.index}`}
+                      value={ipmiAddresses[host.hostname] ?? ""}
+                      onChange={(_event, value) => setIpmiAddresses((previous) => ({
+                          ...previous,
+                          [host.hostname]: value,
+                      }))}
                     />
                 </FormGroup>
+            ))}
+            <FormGroup
+              label="IPMI 아이디"
+              isRequired
+              fieldId="all-in-one-ipmi-user"
+            >
+                <TextInput
+                  id="all-in-one-ipmi-user"
+                  value={ipmiUsername}
+                  onChange={(_event, value) => setIpmiUsername(value)}
+                />
+            </FormGroup>
+            <FormGroup
+              label="IPMI 비밀번호"
+              isRequired
+              fieldId="all-in-one-ipmi-password"
+            >
+                <TextInput
+                  id="all-in-one-ipmi-password"
+                  type="password"
+                  value={ipmiPassword}
+                  onChange={(_event, value) => setIpmiPassword(value)}
+                />
+            </FormGroup>
+        </>
+    );
+
+    const renderGfsStorageStep = () => (
+        <Form className="ct-all-in-one-form" isHorizontal>
+            <FormGroup
+              label="GFS용 디스크 구성 대상 장치"
+              isRequired
+              fieldId="all-in-one-gfs-disks"
+            >
+                {gfsDiskLoadState === "loading" ? (
+                    <Alert
+                      variant="info"
+                      isInline
+                      title="GFS 디스크 목록을 불러오는 중입니다."
+                    />
+                ) : gfsDiskLoadState === "error" ? (
+                    <Alert
+                      variant="danger"
+                      isInline
+                      title="GFS 디스크 목록을 불러오지 못했습니다."
+                    >
+                        {gfsDiskLoadError}
+                    </Alert>
+                ) : gfsDiskOptions.length === 0 ? (
+                    <Alert
+                      variant="warning"
+                      isInline
+                      title="GFS 디스크 후보가 없습니다."
+                    />
+                ) : (
+                    <div className="ct-all-in-one-choice-list">
+                        {gfsDiskOptions.map((disk) => (
+                            <Checkbox
+                              key={disk.value}
+                              id={`all-in-one-gfs-disk-${disk.value.replace(/[^a-zA-Z0-9_-]/g, "-")}`}
+                              label={disk.label}
+                              isChecked={selectedGfsDisks.includes(disk.value)}
+                              isDisabled={disk.inUse}
+                              onChange={(_event, checked) => toggleGfsDisk(disk.value, checked)}
+                            />
+                        ))}
+                    </div>
+                )}
+            </FormGroup>
+            {renderIpmiFields()}
         </Form>
     );
 
@@ -1558,7 +1501,8 @@ export default function AllInOneControlModal({
               isInline
               title="HCI Filesystem은 RBD image를 생성한 뒤 각 host에 rbd map을 반영합니다."
             >
-                SCVM이 아닌 물리 host를 대상으로 /etc/ceph/rbdmap을 적용하고, map된 RBD 장치로 Global File System을 구성합니다.
+                SCVM이 아닌 물리 host를 대상으로 /etc/ceph/rbdmap을 적용하고,
+                map된 RBD 장치로 Global File System을 구성합니다.
             </Alert>
             <FormGroup
               label="RBD pool" isRequired
@@ -1591,21 +1535,6 @@ export default function AllInOneControlModal({
                 />
             </FormGroup>
             <FormGroup
-              label="VG/LV" isRequired
-              fieldId="all-in-one-hci-fs-volume-groups"
-            >
-                <TextArea
-                  id="all-in-one-hci-fs-volume-groups"
-                  value={volumeGroupsText}
-                  rows={4}
-                  resizeOrientation="vertical"
-                  onChange={(_event, value) => setVolumeGroupsText(value)}
-                />
-                <Content component="p" className="ct-all-in-one-help">
-                    한 줄에 `vg_glue,lv_glue` 형식으로 입력합니다.
-                </Content>
-            </FormGroup>
-            <FormGroup
               label="Mount point" isRequired
               fieldId="all-in-one-hci-fs-mount"
             >
@@ -1615,6 +1544,7 @@ export default function AllInOneControlModal({
                   onChange={(_event, value) => setGfsMountPoint(value)}
                 />
             </FormGroup>
+            {renderIpmiFields()}
         </Form>
     );
 
@@ -1624,13 +1554,25 @@ export default function AllInOneControlModal({
               label="로컬 디스크" isRequired
               fieldId="all-in-one-local-disks"
             >
-                <TextArea
-                  id="all-in-one-local-disks"
-                  value={localDisksText}
-                  rows={5}
-                  resizeOrientation="vertical"
-                  onChange={(_event, value) => setLocalDisksText(value)}
-                />
+                {storageDiskLoadState === "loading" ? (
+                    <Alert variant="info" isInline title="스토리지 디스크 목록을 불러오는 중입니다." />
+                ) : storageDiskLoadState === "error" ? (
+                    <Alert variant="danger" isInline title="스토리지 디스크 목록을 불러오지 못했습니다.">{storageDiskLoadError}</Alert>
+                ) : (
+                    <div className="ct-all-in-one-choice-list">
+                        {storageDiskOptions.map((disk) => (
+                            <Checkbox
+                              key={disk.value}
+                              id={`all-in-one-local-disk-${disk.value.replace(/[^a-zA-Z0-9_-]/g, "-")}`}
+                              label={disk.label}
+                              isChecked={localDisks.includes(disk.value)}
+                              onChange={(_event, checked) => setLocalDisks((previous) => (
+                                  checked ? Array.from(new Set([...previous, disk.value])) : previous.filter((value) => value !== disk.value)
+                              ))}
+                            />
+                        ))}
+                    </div>
+                )}
             </FormGroup>
             <Alert
               variant="info" isInline
@@ -1661,23 +1603,23 @@ export default function AllInOneControlModal({
               label="CPU" isRequired
               fieldId="all-in-one-ccvm-cpu"
             >
-                <TextInput
-                  id="all-in-one-ccvm-cpu" value={ccvmCpu}
-                  onChange={(_event, value) => setCcvmCpu(value)}
-                />
+                <FormSelect id="all-in-one-ccvm-cpu" value={ccvmCpu} onChange={(_event, value) => setCcvmCpu(value)}>
+                    <FormSelectOption value="8" label="8 vCore" />
+                    <FormSelectOption value="16" label="16 vCore" />
+                </FormSelect>
             </FormGroup>
             <FormGroup
-              label="Memory GiB" isRequired
+              label="Memory" isRequired
               fieldId="all-in-one-ccvm-memory"
             >
-                <TextInput
-                  id="all-in-one-ccvm-memory"
-                  value={ccvmMemory}
-                  onChange={(_event, value) => setCcvmMemory(value)}
-                />
+                <FormSelect id="all-in-one-ccvm-memory" value={ccvmMemory} onChange={(_event, value) => setCcvmMemory(value)}>
+                    <FormSelectOption value="16" label="16 GiB" />
+                    <FormSelectOption value="32" label="32 GiB" />
+                    <FormSelectOption value="64" label="64 GiB" />
+                </FormSelect>
             </FormGroup>
             <FormGroup
-              label="관리 Bridge" isRequired
+              label="관리네트워크" isRequired
               fieldId="all-in-one-ccvm-mgmt-bridge"
             >
                 <FormSelect
@@ -1690,67 +1632,47 @@ export default function AllInOneControlModal({
                     ))}
                 </FormSelect>
             </FormGroup>
-            <FormGroup label="서비스 Bridge" fieldId="all-in-one-ccvm-service-bridge">
-                <FormSelect
-                  id="all-in-one-ccvm-service-bridge"
-                  value={ccvmServiceBridge}
-                  onChange={(_event, value) => setCcvmServiceBridge(value)}
-                >
-                    {bridgeOptions.filter((option) => !option.value || option.value !== ccvmMgmtBridge).map((option) => (
-                        <FormSelectOption key={option.value} value={option.value} label={option.label} />
-                    ))}
-                </FormSelect>
-            </FormGroup>
-            {usesGfsMount && (
-                <FormGroup
-                  label="GFS mount point" isRequired
-                  fieldId="all-in-one-ccvm-gfs-mount"
-                >
-                    <TextInput
-                      id="all-in-one-ccvm-gfs-mount"
-                      value={gfsMountPoint}
-                      onChange={(_event, value) => setGfsMountPoint(value)}
-                    />
-                </FormGroup>
-            )}
             <Checkbox
               id="all-in-one-service-network-enabled"
-              label="CCVM service network cloud-init 값 직접 지정"
+              label="서비스네트워크"
               isChecked={serviceNetworkEnabled}
               onChange={(_event, checked) => setServiceNetworkEnabled(checked)}
             />
             {serviceNetworkEnabled && (
-                <div className="ct-all-in-one-inline-grid">
-                    <TextInput
-                      aria-label="Service NIC"
-                      placeholder="Service NIC"
-                      value={serviceNic}
-                      onChange={(_event, value) => setServiceNic(value)}
-                    />
-                    <TextInput
-                      aria-label="Service IP"
-                      placeholder="Service IP"
-                      value={serviceIp}
-                      onChange={(_event, value) => setServiceIp(value)}
-                    />
-                    <TextInput
-                      aria-label="Service Prefix"
-                      placeholder="Prefix"
-                      value={servicePrefix}
-                      onChange={(_event, value) => setServicePrefix(value)}
-                    />
-                    <TextInput
-                      aria-label="Service Gateway"
-                      placeholder="Gateway"
-                      value={serviceGw}
-                      onChange={(_event, value) => setServiceGw(value)}
-                    />
-                    <TextInput
-                      aria-label="Service DNS"
-                      placeholder="DNS"
-                      value={serviceDns}
-                      onChange={(_event, value) => setServiceDns(value)}
-                    />
+                <div className="ct-all-in-one-service-network-fields">
+                    <FormGroup label="서비스네트워크" isRequired fieldId="all-in-one-ccvm-service-bridge">
+                        <FormSelect
+                          id="all-in-one-ccvm-service-bridge"
+                          value={ccvmServiceBridge}
+                          onChange={(_event, value) => setCcvmServiceBridge(value)}
+                        >
+                            {bridgeOptions.filter((option) => !option.value || option.value !== ccvmMgmtBridge).map((option) => (
+                                <FormSelectOption key={option.value} value={option.value} label={option.label} />
+                            ))}
+                        </FormSelect>
+                    </FormGroup>
+                    <FormGroup label="서비스 NIC IP" isRequired fieldId="all-in-one-service-ip">
+                        <TextInput
+                          id="all-in-one-service-ip"
+                          value={serviceIp}
+                          onChange={(_event, value) => setServiceIp(value)}
+                        />
+                    </FormGroup>
+                    <FormGroup label="서비스 NIC CIDR" isRequired fieldId="all-in-one-service-cidr">
+                        <TextInput
+                          id="all-in-one-service-cidr"
+                          value={serviceCidr}
+                          placeholder="예: 16"
+                          onChange={(_event, value) => setServiceCidr(value)}
+                        />
+                    </FormGroup>
+                    <FormGroup label="서비스 NIC Gateway" isRequired fieldId="all-in-one-service-gateway">
+                        <TextInput
+                          id="all-in-one-service-gateway"
+                          value={serviceGateway}
+                          onChange={(_event, value) => setServiceGateway(value)}
+                        />
+                    </FormGroup>
                 </div>
             )}
             <Alert
@@ -1764,20 +1686,20 @@ export default function AllInOneControlModal({
         <div className="ct-all-in-one-review">
             <div className="ct-all-in-one-review__summary">
                 <div>
-                    <span>제품 타입</span>
+                    <span>클러스터 종류</span>
                     <strong>{productLabel(productType)}</strong>
                 </div>
                 <div>
-                    <span>Host</span>
+                    <span>구성할 호스트 수</span>
                     <strong>{parseHosts(hostsText).length}대</strong>
                 </div>
                 <div>
-                    <span>CloudStack 준비 예상</span>
+                    <span>Mold 준비 예상</span>
                     <strong>{productType === "ablestack-vm" ? "5~10분" : "약 20분"}</strong>
                 </div>
                 <div>
-                    <span>시간 서버</span>
-                    <strong>{externalTimeServer || currentHostIp || "N/A"}</strong>
+                    <span>외부 시간서버</span>
+                    <strong>{externalTimeServer || "N/A"}</strong>
                 </div>
             </div>
             <Alert
@@ -1785,7 +1707,7 @@ export default function AllInOneControlModal({
               isInline
               title="입력한 값으로 올인원 구성 Job을 한 번에 시작합니다."
             >
-                라이센스, 클러스터 구성, VM 준비, 스토리지 구성, systemProfile 반영이 순서대로 실행됩니다.
+                라이센스 등록이 완료된 상태에서 클러스터 구성, VM 준비, 스토리지 구성, systemProfile 반영이 순서대로 실행됩니다.
                 구성 완료 후 모니터링센터 연결 단계로 이어집니다.
             </Alert>
         </div>
@@ -1793,8 +1715,6 @@ export default function AllInOneControlModal({
 
     const renderInputPanel = () => {
         switch (activeFlowStep.id) {
-        case "license":
-            return renderLicenseStep();
         case "cluster":
             return renderClusterStep();
         case "scvm":
@@ -1889,7 +1809,7 @@ export default function AllInOneControlModal({
                     <CardBody>
                         <div className="ct-deploy-overview__meta">
                             <div>
-                                <span>제품 타입</span>
+                                <span>클러스터 종류</span>
                                 <strong>{productLabel(productType)}</strong>
                             </div>
                             <div>
@@ -1897,7 +1817,7 @@ export default function AllInOneControlModal({
                                 <strong>{activeFlowStep.label}</strong>
                             </div>
                             <div>
-                                <span>CloudStack 준비 예상</span>
+                                <span>Mold 준비 예상</span>
                                 <strong>{productType === "ablestack-vm" ? "5~10분" : "약 20분"}</strong>
                             </div>
                             <div>

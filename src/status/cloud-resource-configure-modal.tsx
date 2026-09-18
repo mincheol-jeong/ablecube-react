@@ -10,10 +10,10 @@ import {
     ModalBody,
     ModalFooter,
     ModalHeader,
-    Spinner,
     TextInput,
 } from "@patternfly/react-core";
 
+import { bootstrapCCVM } from "../services/api/cloud-vm-deploy.ts";
 import {
     fetchClusterConfigProfile,
     type ClusterConfigProfile,
@@ -186,8 +186,8 @@ function secondaryAndHostRows(profile: ClusterConfigProfile | null): AutoConfigR
     return [
         { label: "Secondary Storage", value: secondaryStorageUrl(profile), mono: true },
         { label: "Physical Network VLAN", value: "1-1" },
-        { label: "Host 인증", value: "CCVM CloudStack 관리 SSH key 사용" },
-        { label: "공개키", value: "/var/cloudstack/management/.ssh/id_rsa.pub", mono: true },
+        { label: "Host 인증", value: "CCVM Mold 관리 SSH key 사용" },
+        { label: "공개키", value: "/var/mold/management/.ssh/id_rsa.pub", mono: true },
     ];
 }
 
@@ -231,6 +231,7 @@ export default function CloudResourceConfigureModal({
     const [clusterProfileError, setClusterProfileError] = React.useState("");
     const [submitState, setSubmitState] = React.useState<SubmitState>("idle");
     const [message, setMessage] = React.useState("");
+    const ccvmBootstrapCompleteRef = React.useRef(false);
     const pollTimerRef = React.useRef<number | null>(null);
 
     React.useEffect(() => {
@@ -244,6 +245,7 @@ export default function CloudResourceConfigureModal({
         setClusterProfileError("");
         setSubmitState("idle");
         setMessage("");
+        ccvmBootstrapCompleteRef.current = false;
 
         fetchClusterConfigProfile()
                 .then((profile) => {
@@ -271,6 +273,14 @@ export default function CloudResourceConfigureModal({
         onClose();
     };
 
+    const ensureCCVMBootstrap = async () => {
+        if (ccvmBootstrapCompleteRef.current) return;
+
+        setMessage("클라우드센터 가상머신 상세 설정을 진행하고 있습니다.");
+        await bootstrapCCVM();
+        ccvmBootstrapCompleteRef.current = true;
+    };
+
     const checkPlan = async () => {
         const validationMessage = validate(form);
 
@@ -284,6 +294,8 @@ export default function CloudResourceConfigureModal({
         setMessage("클라우드 리소스 구성 계획을 확인하고 있습니다.");
 
         try {
+            await ensureCCVMBootstrap();
+            setMessage("클라우드 리소스 구성 계획을 확인하고 있습니다.");
             const nextPlan = await fetchMoldBootstrapPlan(form);
 
             setPlan(nextPlan);
@@ -349,6 +361,8 @@ export default function CloudResourceConfigureModal({
         setJob(null);
 
         try {
+            await ensureCCVMBootstrap();
+            setMessage("클라우드 리소스 구성 Job을 시작하고 있습니다.");
             const startedJob = await startMoldBootstrap(form);
 
             setJob(startedJob);
@@ -612,7 +626,7 @@ export default function CloudResourceConfigureModal({
                                         </div>
                                     ))}
                                 </dl>
-                                <div className="ct-cloud-resource-modal__host-list" aria-label="CloudStack Host URL">
+                                <div className="ct-cloud-resource-modal__host-list" aria-label="Mold Host URL">
                                     {clusterHostUrls.length > 0
                                         ? clusterHostUrls.map((url) => (
                                             <span key={url} className="ct-cloud-resource-modal__host-chip">
@@ -686,10 +700,11 @@ export default function CloudResourceConfigureModal({
                 </Button>
                 <Button
                   variant="primary" isDisabled={isBusy}
+                  isLoading={submitState === "running"}
+                  spinnerAriaLabel="클라우드 리소스 구성 중"
                   onClick={execute}
                 >
-                    {submitState === "running" && <Spinner size="sm" aria-label="클라우드 리소스 구성 중" />}
-                    구성
+                    {submitState === "running" ? "구성 중" : "구성"}
                 </Button>
                 <Button
                   variant="link" isDisabled={isBusy}

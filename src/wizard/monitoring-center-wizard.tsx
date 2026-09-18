@@ -14,8 +14,6 @@ import {
   Button,
   Checkbox,
   Alert,
-  Label,
-  Spinner,
   DescriptionList,
   DescriptionListGroup,
   DescriptionListTerm,
@@ -24,6 +22,15 @@ import {
 import { InfoCircleIcon, AngleRightIcon } from "@patternfly/react-icons";
 
 import ValidationErrorModal from "../components/common/ValidationErrorModal";
+import WizardStepStatusLabel, {
+  wizardStatusRowClass,
+  type WizardStepStatus,
+} from "../components/common/WizardStepStatus";
+import { fetchClusterConfigProfile } from "../services/api/cluster-config";
+import {
+  checkMonitoringTargetHealth,
+  configureMonitoring,
+} from "../services/api/monitoring-config";
 import "./monitoring-center-wizard.scss";
 import {
   isInteger,
@@ -34,11 +41,18 @@ import {
 } from "./validation";
 
 type ClusterType = "ablestack-hci" | "ablestack-vm" | "ablestack-standalone" | "ablestack-hci-filesystem";
-type DeployPhase = "idle" | "running" | "done";
+type DeployPhase = "idle" | "running" | "done" | "error";
+
+interface MonitoringDeploySteps {
+  health: WizardStepStatus;
+  targets: WizardStepStatus;
+  profile: WizardStepStatus;
+}
 
 interface MonitoringCenterWizardModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onCompleted?: () => void;
   clusterType?: ClusterType;
 }
 
@@ -47,18 +61,41 @@ const DEFAULT_CCVM_IP = "";
 const DEFAULT_CUBE_HOSTS = [""];
 const DEFAULT_SCVM_HOSTS = [""];
 
+const defaultHostCount = (type: ClusterType) =>
+  type === "ablestack-vm" || type === "ablestack-standalone" ? 1 : DEFAULT_HOST_COUNT;
+
 const resizeHostList = (values: string[], count: number) =>
   Array.from({ length: count }, (_, index) => values[index] ?? "");
+
+const isClusterType = (value: string): value is ClusterType => [
+  "ablestack-hci",
+  "ablestack-vm",
+  "ablestack-standalone",
+  "ablestack-hci-filesystem",
+].includes(value);
+
+const fillEmptyHostValues = (current: string[], incoming: string[], count: number) =>
+  Array.from({ length: count }, (_, index) => current[index]?.trim() || incoming[index] || "");
+
+const DEFAULT_DEPLOY_STEPS: MonitoringDeploySteps = {
+  health: "pending",
+  targets: "pending",
+  profile: "pending",
+};
 
 export default function MonitoringCenterWizardModal({
   isOpen,
   onClose,
+  onCompleted,
   clusterType = "ablestack-hci",
 }: MonitoringCenterWizardModalProps) {
   const [hostCount, setHostCount] = React.useState(DEFAULT_HOST_COUNT);
   const [ccvmIp, setCcvmIp] = React.useState(DEFAULT_CCVM_IP);
   const [cubeHosts, setCubeHosts] = React.useState<string[]>(DEFAULT_CUBE_HOSTS);
   const [scvmHosts, setScvmHosts] = React.useState<string[]>(DEFAULT_SCVM_HOSTS);
+  const [resolvedClusterType, setResolvedClusterType] = React.useState<ClusterType>(clusterType);
+  const [clusterConfigLoadState, setClusterConfigLoadState] = React.useState<"idle" | "loading" | "success" | "error">("idle");
+  const [clusterConfigLoadError, setClusterConfigLoadError] = React.useState("");
 
   const [smtpEnabled, setSmtpEnabled] = React.useState(false);
   const [smtpServer, setSmtpServer] = React.useState("");
@@ -73,17 +110,26 @@ export default function MonitoringCenterWizardModal({
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [cancelConfirmOpen, setCancelConfirmOpen] = React.useState(false);
   const [deployPhase, setDeployPhase] = React.useState<DeployPhase>("idle");
+  const [deploySteps, setDeploySteps] = React.useState<MonitoringDeploySteps>(DEFAULT_DEPLOY_STEPS);
+  const [deployError, setDeployError] = React.useState("");
   const [disableNav, setDisableNav] = React.useState(false);
   const [validationMessage, setValidationMessage] = React.useState("");
 
   const nextStepRef = React.useRef<null | (() => void)>(null);
-  const isScvmRequired = clusterType === "ablestack-hci" || clusterType === "ablestack-hci-filesystem";
+  const isScvmRequired = resolvedClusterType === "ablestack-hci" || resolvedClusterType === "ablestack-hci-filesystem";
+  const isStandalone = resolvedClusterType === "ablestack-standalone";
+  const monitoringTargetLabel = isScvmRequired
+    ? "Cube 호스트, 클라우드센터 VM, 스토리지센터 VM"
+    : "Cube 호스트와 클라우드센터 VM";
 
   const resetState = React.useCallback(() => {
-    setHostCount(DEFAULT_HOST_COUNT);
+    setHostCount(defaultHostCount(clusterType));
     setCcvmIp(DEFAULT_CCVM_IP);
     setCubeHosts(DEFAULT_CUBE_HOSTS);
     setScvmHosts(DEFAULT_SCVM_HOSTS);
+    setResolvedClusterType(clusterType);
+    setClusterConfigLoadState("idle");
+    setClusterConfigLoadError("");
     setSmtpEnabled(false);
     setSmtpServer("");
     setSmtpPort("");
@@ -93,9 +139,52 @@ export default function MonitoringCenterWizardModal({
     setConfirmOpen(false);
     setCancelConfirmOpen(false);
     setDeployPhase("idle");
+    setDeploySteps(DEFAULT_DEPLOY_STEPS);
+    setDeployError("");
     setDisableNav(false);
     setValidationMessage("");
-  }, []);
+  }, [clusterType]);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+
+    let isActive = true;
+    setClusterConfigLoadState("loading");
+    setClusterConfigLoadError("");
+
+    fetchClusterConfigProfile()
+      .then((profile) => {
+        if (!isActive) return;
+
+        const normalizedProfileType = profile.type.trim().toLowerCase();
+        const profileType = isClusterType(normalizedProfileType) ? normalizedProfileType : clusterType;
+        const profileHosts = profileType === "ablestack-standalone" ? profile.hosts.slice(0, 1) : profile.hosts;
+        const nextHostCount = profileType === "ablestack-standalone"
+          ? 1
+          : Math.max(1, profileHosts.length || defaultHostCount(profileType));
+        const cubeHostIps = profileHosts.map((host) => host.ablecube);
+        const scvmHostIps = profileHosts.map((host) => host.scvmMngt);
+
+        setResolvedClusterType(profileType);
+        setHostCount(nextHostCount);
+        setCcvmIp((current) => current.trim() || profile.ccvmIp);
+        setCubeHosts((current) => fillEmptyHostValues(current, cubeHostIps, nextHostCount));
+        setScvmHosts((current) => fillEmptyHostValues(current, scvmHostIps, nextHostCount));
+        setClusterConfigLoadState("success");
+      })
+      .catch((error) => {
+        if (!isActive) return;
+        setResolvedClusterType(clusterType);
+        setClusterConfigLoadState("error");
+        setClusterConfigLoadError(
+          error instanceof Error ? error.message : "cluster.json 정보를 불러오지 못했습니다."
+        );
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [clusterType, isOpen]);
 
   const handleClose = () => {
     onClose();
@@ -103,10 +192,21 @@ export default function MonitoringCenterWizardModal({
   };
 
   const requestClose = () => {
+    if (deployPhase === "done") {
+      handleClose();
+      return;
+    }
     setCancelConfirmOpen(true);
   };
 
   const updateHostCount = (value: string) => {
+    if (isStandalone) {
+      setHostCount(1);
+      setCubeHosts((current) => resizeHostList(current, 1));
+      setScvmHosts((current) => resizeHostList(current, 1));
+      return;
+    }
+
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) {
       setHostCount(0);
@@ -170,7 +270,7 @@ export default function MonitoringCenterWizardModal({
     return "";
   };
 
-  const executeMockDeploy = () => {
+  const executeMonitoringDeploy = async () => {
     const errorMessage = validateWallMonitoring();
     if (errorMessage) {
       setValidationMessage(errorMessage);
@@ -181,9 +281,53 @@ export default function MonitoringCenterWizardModal({
     setValidationMessage("");
     setConfirmOpen(false);
     setDeployPhase("running");
+    setDeploySteps({ health: "running", targets: "pending", profile: "pending" });
+    setDeployError("");
     setDisableNav(true);
-    nextStepRef.current?.();
+    const goToDeployStep = nextStepRef.current;
+    nextStepRef.current = null;
+    goToDeployStep?.();
+
+    try {
+      await checkMonitoringTargetHealth(resolvedClusterType);
+      setDeploySteps({ health: "succeeded", targets: "running", profile: "pending" });
+
+      await configureMonitoring({
+        ccvm: [ccvmIp.trim()],
+        cube: cubeHosts.slice(0, hostCount).map((address) => address.trim()),
+        scvm: isScvmRequired
+          ? scvmHosts.slice(0, hostCount).map((address) => address.trim())
+          : [],
+        smtp: smtpEnabled
+          ? {
+            enabled: true,
+            host: smtpServer.trim(),
+            port: Number(smtpPort),
+            user: smtpEmail.trim(),
+            password: smtpPassword,
+          }
+          : { enabled: false },
+      });
+      setDeploySteps({ health: "succeeded", targets: "succeeded", profile: "succeeded" });
+      setDeployPhase("done");
+      setDisableNav(false);
+      onCompleted?.();
+    } catch (error) {
+      setDeploySteps((current) => {
+        const failedStep = Object.entries(current).find(([, status]) => status === "running")?.[0] as keyof MonitoringDeploySteps | undefined;
+        return failedStep ? { ...current, [failedStep]: "failed" } : current;
+      });
+      setDeployError(error instanceof Error ? error.message : "Wall 모니터링 구성에 실패했습니다.");
+      setDeployPhase("error");
+      setDisableNav(false);
+    }
   };
+
+  const activeDeployStep = deploySteps.health === "running"
+    ? 1
+    : deploySteps.targets === "running"
+      ? 2
+      : 3;
 
   const smtpEnabledLabel = smtpEnabled ? "선택" : "미선택";
 
@@ -207,15 +351,21 @@ export default function MonitoringCenterWizardModal({
     if (isDeploy) {
       return (
         <div className="ct-monitoring-center-wizard__footer">
-          <Button
-            variant="primary"
-            onClick={() => {
-              setDeployPhase("done");
-              goToNextStep();
-            }}
-          >
-            완료
-          </Button>
+          {deployPhase === "done" && (
+            <Button variant="primary" onClick={goToNextStep}>
+              완료
+            </Button>
+          )}
+          {deployPhase === "error" && (
+            <Button variant="primary" onClick={executeMonitoringDeploy}>
+              다시 구성
+            </Button>
+          )}
+          {deployPhase === "running" && (
+            <Button variant="primary" isDisabled isLoading>
+              구성 중
+            </Button>
+          )}
         </div>
       );
     }
@@ -247,7 +397,7 @@ export default function MonitoringCenterWizardModal({
           </Button>
         )}
         {isFinish && (
-          <Button variant="primary" onClick={close}>
+          <Button variant="primary" onClick={handleClose}>
             완료
           </Button>
         )}
@@ -323,10 +473,22 @@ export default function MonitoringCenterWizardModal({
             <div className="ct-monitoring-center-wizard__content">
               <Content>
                 <Content component="p">
-                  클러스터의 구성 요소인 Cube 호스트, 클라우드센터 VM, 스토리지센터 VM을 모니터링하기 위해 아래 정보를 입력하십시오.
+                  클러스터의 구성 요소인 {monitoringTargetLabel}을 모니터링하기 위해 아래 정보를 입력하십시오.
                   (호스트 수가 변경될 경우 입력한 값이 초기화됩니다.)
                 </Content>
               </Content>
+              <Alert
+                isInline
+                title={clusterConfigLoadState === "error"
+                  ? "cluster.json 정보를 불러오지 못했습니다."
+                  : clusterConfigLoadState === "success"
+                    ? "cluster.json의 모니터링 대상 IP를 자동으로 적용했습니다."
+                    : "cluster.json의 모니터링 대상 IP를 불러오는 중입니다."}
+                variant={clusterConfigLoadState === "error" ? "warning" : "info"}
+                className="ct-monitoring-center-wizard__info"
+              >
+                {clusterConfigLoadState === "error" && clusterConfigLoadError}
+              </Alert>
               <Form className="ct-monitoring-center-wizard__section ct-monitoring-center-wizard__form-horizontal" isHorizontal>
                 <FormGroup
                   label="호스트 수"
@@ -338,6 +500,7 @@ export default function MonitoringCenterWizardModal({
                     id="monitoring-host-count"
                     type="number"
                     value={hostCount}
+                    isDisabled={isStandalone}
                     onChange={(_event, value) => updateHostCount(String(value))}
                   />
                 </FormGroup>
@@ -405,7 +568,7 @@ export default function MonitoringCenterWizardModal({
                 icon={<InfoCircleIcon />}
                 className="ct-monitoring-center-wizard__info"
               >
-                <Content component="p">Cube 호스트, 클라우드센터 VM, 스토리지센터 VM의 관리 IP 정보를 입력하십시오.</Content>
+                <Content component="p">{monitoringTargetLabel}의 관리 IP 정보를 입력하십시오.</Content>
               </Alert>
             </div>
           </WizardStep>
@@ -576,27 +739,31 @@ export default function MonitoringCenterWizardModal({
           <WizardStep name="구성" id="monitoring-deploy">
             <div className="ct-monitoring-center-wizard__content">
               <Content component="p" className="ct-monitoring-center-wizard__deploy-title">
-                Wall 모니터링센터를 구성 중입니다. 전체 3단계 중 2단계 진행 중입니다.
+                {deployPhase === "done"
+                  ? "Wall 모니터링센터 구성이 완료되었습니다."
+                  : deployPhase === "error"
+                    ? "Wall 모니터링센터 구성에 실패했습니다. 실패 원인을 확인한 후 다시 시도해주세요."
+                    : `Wall 모니터링센터를 구성 중입니다. 전체 3단계 중 ${activeDeployStep}단계 진행 중입니다.`}
               </Content>
               <div className="ct-monitoring-center-wizard__status-list">
-                <div>
-                  <Label color="green" variant="outline">완료</Label>
-                  <span>Wall 구성 HOST 네트워크 연결 테스트</span>
+                <div className={wizardStatusRowClass(deploySteps.health)}>
+                  <WizardStepStatusLabel status={deploySteps.health} ariaLabel="모니터링 대상 네트워크 연결 확인 중" />
+                  <span className="ct-wizard-status-row__text">Wall 구성 HOST 네트워크 연결 테스트</span>
                 </div>
-                <div>
-                  <Label color={deployPhase === "running" ? "orange" : "blue"} variant="outline">
-                    {deployPhase === "running" ? "진행중" : "준비중"}
-                  </Label>
-                  {deployPhase === "running" && <Spinner size="sm" aria-label="진행중" />}
-                  <span>모니터링 대상 IP 설정</span>
+                <div className={wizardStatusRowClass(deploySteps.targets)}>
+                  <WizardStepStatusLabel status={deploySteps.targets} ariaLabel="모니터링 대상 IP 설정 진행 중" />
+                  <span className="ct-wizard-status-row__text">Wall·Netdive·서비스·SMTP 구성 및 실행 상태 검증</span>
                 </div>
-                {smtpEnabled && (
-                  <div>
-                    <Label color="blue" variant="outline">준비중</Label>
-                    <span>알림 SMTP 설정</span>
-                  </div>
-                )}
+                <div className={wizardStatusRowClass(deploySteps.profile)}>
+                  <WizardStepStatusLabel status={deploySteps.profile} ariaLabel="모니터링 구성 완료 상태 반영 중" />
+                  <span className="ct-wizard-status-row__text">전체 호스트 모니터링 구성 완료 상태 반영</span>
+                </div>
               </div>
+              {deployError && (
+                <Alert isInline variant="danger" title="Wall 모니터링 구성 실패">
+                  {deployError}
+                </Alert>
+              )}
             </div>
           </WizardStep>
 
@@ -628,7 +795,7 @@ export default function MonitoringCenterWizardModal({
           <Content component="p">모니터링센터 대시보드 구성을 진행하시겠습니까?</Content>
         </ModalBody>
         <ModalFooter>
-          <Button variant="primary" onClick={executeMockDeploy}>
+          <Button variant="primary" onClick={executeMonitoringDeploy}>
             실행
           </Button>
           <Button variant="link" onClick={() => setConfirmOpen(false)}>

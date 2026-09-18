@@ -20,6 +20,7 @@ export interface GfsMountInfo {
   status: string;
   devices: string;
   multipaths: string;
+  uuid: string;
   physicalVolume: string;
   volumeGroup: string;
   diskSize: string;
@@ -81,9 +82,12 @@ export default function GfsMountInfoModal({
     return null;
   }
 
+  const diskDevice = mountInfo.multipaths && mountInfo.multipaths.trim().toUpperCase() !== "N/A"
+    ? mountInfo.multipaths
+    : mountInfo.devices;
   const rows = [
     ["마운트 경로", mountInfo.mountPath],
-    ["물리 볼륨", `${renderValue(mountInfo.devices)} ( ${renderValue(mountInfo.multipaths)} )`],
+    ["디스크 장치명", diskDevice],
     ["볼륨 그룹", mountInfo.volumeGroup || mountInfo.physicalVolume],
     ["스토리지 용량", mountInfo.totalCapacity || mountInfo.diskSize],
     ["사용량", `${renderValue(mountInfo.usedCapacity)} / ${renderValue(mountInfo.usagePercentage)}`],

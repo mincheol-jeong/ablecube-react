@@ -29,10 +29,16 @@ import {
 } from "../services/api/gfs-resource-status";
 import {
   formatMultipathSyncAction,
+  formatMultipathSyncCompletedMessage,
+  formatMultipathSyncProgressMessage,
   runMultipathSync,
-  summarizeMultipathSyncResult,
   type MultipathSyncAction,
 } from "../services/api/multipath-sync";
+import {
+  listGfsHosts,
+  removeClusterHost,
+  type GfsHost,
+} from "../services/api/card-actions";
 import {
   DotStatus,
   InfoGrid,
@@ -56,12 +62,13 @@ const STATUS_META = {
   },
 };
 
-export default function GfsResourceStatus() {
+export default function GfsResourceStatus({ pollingEnabled = true }: { pollingEnabled?: boolean }) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [isExternalStorageSyncModalOpen, setIsExternalStorageSyncModalOpen] = React.useState(false);
   const [isExternalStorageRescanModalOpen, setIsExternalStorageRescanModalOpen] = React.useState(false);
   const [isWwnListModalOpen, setIsWwnListModalOpen] = React.useState(false);
   const [isHostRemoveModalOpen, setIsHostRemoveModalOpen] = React.useState(false);
+  const [gfsHosts, setGfsHosts] = React.useState<GfsHost[]>([]);
   const [multipathProgress, setMultipathProgress] = React.useState<{
     isOpen: boolean;
     title: string;
@@ -73,13 +80,20 @@ export default function GfsResourceStatus() {
     phase: "running",
     message: "",
   });
+  const [hostRemoveProgress, setHostRemoveProgress] = React.useState<{
+    isOpen: boolean;
+	title: string;
+    phase: ActionProgressPhase;
+    message: string;
+  }>({ isOpen: false, title: "호스트 제거", phase: "running", message: "" });
 
   const handleStatusError = React.useCallback((error: unknown) => {
     console.error("gfs resource status API error:", error);
   }, []);
-  const { data, isCollecting } = useStatusPolling({
+  const { data, isCollecting, refresh } = useStatusPolling({
     fetcher: fetchGfsResourceStatus,
     fallback: GFS_RESOURCE_STATUS_FALLBACK,
+    enabled: pollingEnabled,
     onError: handleStatusError,
   });
 
@@ -101,17 +115,17 @@ export default function GfsResourceStatus() {
       isOpen: true,
       title,
       phase: "running",
-      message: `${title}을 실행하고 있습니다.`,
+      message: formatMultipathSyncProgressMessage(action),
     });
 
     try {
-      const result = await runMultipathSync(action);
+      await runMultipathSync(action);
 
       setMultipathProgress({
         isOpen: true,
         title,
         phase: "success",
-        message: summarizeMultipathSyncResult(result, `${title}이 완료되었습니다.`),
+        message: formatMultipathSyncCompletedMessage(action),
       });
     } catch (error) {
       console.error("multipath sync API error:", error);
@@ -158,19 +172,48 @@ export default function GfsResourceStatus() {
     setIsWwnListModalOpen(false);
   };
 
-  const openHostRemoveModal = () => {
-    setIsHostRemoveModalOpen(true);
+  const openHostRemoveModal = async () => {
     setIsOpen(false);
+    try {
+      setGfsHosts(await listGfsHosts());
+      setIsHostRemoveModalOpen(true);
+    } catch (error) {
+      setHostRemoveProgress({
+        isOpen: true,
+		title: "호스트 제거",
+        phase: "error",
+        message: error instanceof Error ? error.message : "GFS 호스트 목록 조회에 실패했습니다.",
+      });
+    }
   };
 
   const closeHostRemoveModal = () => {
     setIsHostRemoveModalOpen(false);
   };
 
-  const confirmHostRemove = (hostname: string) => {
-    // TODO: 백엔드 API 전환 후 GFS host remove API로 연결합니다.
-    console.log("gfs host remove", hostname);
+  const confirmHostRemove = async (hostname: string) => {
     setIsHostRemoveModalOpen(false);
+    setHostRemoveProgress({ isOpen: true, title: "호스트 제거", phase: "running", message: `${hostname} 호스트 제거 Job을 시작하고 있습니다.` });
+    try {
+      const job = await removeClusterHost(hostname, (message, currentJob) => {
+        const title = currentJob.cluster_type === "ablestack-hci-filesystem"
+          ? "HCI Filesystem 호스트 제거"
+          : "VM 호스트 제거";
+        setHostRemoveProgress({ isOpen: true, title, phase: "running", message });
+      });
+      await refresh();
+      const title = job.cluster_type === "ablestack-hci-filesystem"
+        ? "HCI Filesystem 호스트 제거"
+        : "VM 호스트 제거";
+      setHostRemoveProgress({ isOpen: true, title, phase: "success", message: `${hostname} 호스트 제거가 완료되었습니다.` });
+    } catch (error) {
+      setHostRemoveProgress({
+        isOpen: true,
+		title: "호스트 제거",
+        phase: "error",
+        message: error instanceof Error ? error.message : "호스트 제거에 실패했습니다.",
+      });
+    }
   };
 
   const statusDetail = (statusKey: string) => (
@@ -186,6 +229,7 @@ export default function GfsResourceStatus() {
   );
   const fenceStatus = statusDetail(data.fenceDeviceStatus);
   const lockStatus = statusDetail(data.lockDeviceStatus);
+  const gfsStatus = statusDetail(data.gfsDeviceStatus);
 
   return (
     <Card className="ct-status-card">
@@ -249,7 +293,7 @@ export default function GfsResourceStatus() {
       </CardHeader>
 
       <CardBody>
-        <InfoGrid>
+        <InfoGrid className="ct-status-card__info-grid--gfs-resource">
           <InfoItem label="펜스 장치 상태">
             <DotStatus tone={fenceStatus.color}>
               {fenceStatus.label}
@@ -260,6 +304,11 @@ export default function GfsResourceStatus() {
               {lockStatus.label}
             </DotStatus>
           </InfoItem>
+          <InfoItem label="GFS2 마운트 장치 상태">
+            <DotStatus tone={gfsStatus.color}>
+              {gfsStatus.label}
+            </DotStatus>
+          </InfoItem>
           <InfoItem label="펜스 장치 상세" full mono>
             {data.fenceDeviceDetail || "N/A"}
           </InfoItem>
@@ -267,6 +316,15 @@ export default function GfsResourceStatus() {
             <span className="ct-status-card__line-stack">
               {data.lockDeviceDetails.length > 0
                 ? data.lockDeviceDetails.map((line, index) => (
+                    <span key={`${line}-${index}`}>{line}</span>
+                  ))
+                : <span>N/A</span>}
+            </span>
+          </InfoItem>
+          <InfoItem label="GFS2 마운트 장치 상세" full mono>
+            <span className="ct-status-card__line-stack">
+              {data.gfsDeviceDetails.length > 0
+                ? data.gfsDeviceDetails.map((line, index) => (
                     <span key={`${line}-${index}`}>{line}</span>
                   ))
                 : <span>N/A</span>}
@@ -322,15 +380,23 @@ export default function GfsResourceStatus() {
         title="호스트 제거"
         message="제거할 호스트를 선택해 주세요."
         selectLabel="호스트"
-        options={[
-          { value: "ablecube1", label: "ablecube1" },
-          { value: "ablecube2", label: "ablecube2" },
-          { value: "ablecube3", label: "ablecube3" },
-        ]}
-        warning="호스트를 제거하면 해당 호스트는 클러스터에서 제외되며, 더 이상 자원을 사용할 수 없습니다."
-        checkLabel="호스트명 확인"
+        options={gfsHosts.map((host) => ({
+          value: host.hostname,
+          label: host.address ? `${host.hostname} (${host.address})` : host.hostname,
+        }))}
+        warning="호스트 제거 시 해당 호스트에서 실행 중인 가상머신은 다른 정상 호스트로 마이그레이션되며, 마이그레이션이 완료된 후 해당 호스트가 클러스터에서 삭제됩니다. 현재 화면을 제공하는 호스트 자신은 제거할 수 없으므로 다른 정상 호스트에서 실행해 주세요."
+        checkLabel="가상머신 마이그레이션과 호스트 삭제 내용을 확인했습니다."
+        confirmLabel="호스트 제거"
         onClose={closeHostRemoveModal}
         onConfirm={confirmHostRemove}
+      />
+
+      <ActionProgressModal
+        isOpen={hostRemoveProgress.isOpen}
+        title={hostRemoveProgress.title}
+        phase={hostRemoveProgress.phase}
+        message={hostRemoveProgress.message}
+        onClose={() => setHostRemoveProgress((current) => ({ ...current, isOpen: false }))}
       />
     </Card>
   );

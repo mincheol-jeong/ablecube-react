@@ -22,8 +22,11 @@ export interface DiskInventoryOption {
   state: string;
   model: string;
   vendor: string;
-  wwn: string;
   type: string;
+  uuid: string;
+  pathMode: string;
+  inUse: boolean;
+  inUseReason: string;
   label: string;
 }
 
@@ -39,7 +42,7 @@ export interface StorageVmDiskInventory {
 }
 
 type RecordValue = Record<string, unknown>;
-type DiskInventoryAction = "list" | "gfs" | "rbd";
+type DiskInventoryAction = "list" | "gfs" | "rbd" | "detail";
 
 function isRecord(value: unknown): value is RecordValue {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -155,6 +158,11 @@ function readOptionalString(source: RecordValue, key: string): string {
   return "";
 }
 
+function readBoolean(source: RecordValue, key: string): boolean {
+  const value = source[key];
+  return value === true || value === 1 || value === "true";
+}
+
 function diskPath(device: RecordValue): string {
   const path = readOptionalString(device, "path");
   const rbdPath = readOptionalString(device, "rbd_path");
@@ -182,7 +190,7 @@ function flattenDisks(devices: RecordValue[]): RecordValue[] {
   });
 }
 
-function diskOption(device: RecordValue): DiskInventoryOption {
+function diskOption(device: RecordValue, preferStableId = false): DiskInventoryOption {
   const name = readOptionalString(device, "name") || readOptionalString(device, "kname");
   const path = diskPath(device);
   const deviceId = readOptionalString(device, "id");
@@ -192,11 +200,16 @@ function diskOption(device: RecordValue): DiskInventoryOption {
   const vendor = readOptionalString(device, "vendor");
   const model = readOptionalString(device, "model");
   const wwn = readOptionalString(device, "wwn");
-  const details = [path, deviceId, state, size, vendor, model, wwn].filter(Boolean);
+  const uuid = readOptionalString(device, "uuid") || wwn;
+  const pathMode = readOptionalString(device, "path_mode") || "single";
+  const inUse = readBoolean(device, "in_use");
+  const inUseReason = readOptionalString(device, "in_use_reason");
+  const details = [path, uuid, pathMode, state, size, vendor, model, inUse ? "사용 중 (파티션 존재)" : ""].filter(Boolean);
+  const value = preferStableId ? deviceId : path || deviceId || name;
 
   return {
-    id: path || deviceId || name,
-    value: path || deviceId || name,
+    id: value,
+    value,
     name,
     path,
     device: path || name,
@@ -205,8 +218,11 @@ function diskOption(device: RecordValue): DiskInventoryOption {
     state,
     model,
     vendor,
-    wwn,
     type,
+    uuid,
+    pathMode,
+    inUse,
+    inUseReason,
     label: [name, ...details].filter(Boolean).join(" "),
   };
 }
@@ -216,9 +232,11 @@ export async function fetchDiskInventory(action: DiskInventoryAction = "list"): 
   const inventory = unwrapApiValue(raw);
   const record = isRecord(inventory) ? inventory : {};
   const rawDevices = readRecordArray(record, "blockdevices");
-  const sourceDevices = action === "gfs" ? rawDevices : flattenDisks(rawDevices);
+  const sourceDevices = action === "gfs" || action === "detail"
+    ? rawDevices
+    : flattenDisks(rawDevices);
   const devices = sourceDevices
-    .map(diskOption)
+    .map((device) => diskOption(device, action === "gfs"))
     .filter((disk) => disk.value);
   const seen = new Set<string>();
 

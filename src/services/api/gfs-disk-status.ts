@@ -5,6 +5,7 @@ export interface GfsDiskMountInfo {
   status: string;
   devices: string;
   multipaths: string;
+  uuid: string;
   physicalVolume: string;
   volumeGroup: string;
   diskSize: string;
@@ -114,6 +115,12 @@ function formatList(values: string[] | undefined): string {
     .filter(Boolean) ?? [];
 
   return normalizedValues.length > 0 ? normalizedValues.join(", ") : "N/A";
+}
+
+function formatFirstListValue(values: string[] | undefined): string {
+  return values
+    ?.map((value) => value.trim())
+    .find(Boolean) ?? "N/A";
 }
 
 function formatSize(size: string | undefined): string {
@@ -311,6 +318,7 @@ function mapBlockDevice(
     status: "Health OK",
     devices: formatList(blockDevice.devices),
     multipaths: formatList(blockDevice.multipaths),
+    uuid: formatFirstListValue(blockDevice.disk_id),
     physicalVolume: lvm,
     volumeGroup: lvm,
     diskSize: totalCapacity,

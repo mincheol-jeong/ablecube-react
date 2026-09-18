@@ -8,6 +8,8 @@ import {
   Content,
   Form,
   FormGroup,
+  FormSelect,
+  FormSelectOption,
   Radio,
   Switch,
   TextInput,
@@ -18,12 +20,12 @@ import {
   DescriptionListGroup,
   DescriptionListTerm,
   DescriptionListDescription,
-  Spinner,
 } from "@patternfly/react-core";
 import { CheckCircleIcon, InfoCircleIcon } from "@patternfly/react-icons";
 import cockpit from "cockpit";
 
 import ValidationErrorModal from "../components/common/ValidationErrorModal";
+import WizardStepStatusLabel, { wizardStatusRowClass } from "../components/common/WizardStepStatus";
 import {
   fetchDeployRunJobs,
   startDeployRun,
@@ -52,6 +54,7 @@ import {
 } from "./validation";
 
 type ClusterType = "ablestack-hci" | "ablestack-vm" | "ablestack-standalone" | "ablestack-hci-filesystem";
+type PcsNodeIpSource = "ablecube" | "ablecubePn";
 type RadioValue = "new" | "existing";
 type HostMode = "new" | "add";
 type HostRole = "master" | "second" | "other";
@@ -125,13 +128,6 @@ const DEFAULT_HOSTS: ClusterHostRow[] = [
   },
 ];
 
-const STEP_STATUS_LABELS: Record<string, string> = {
-  pending: "대기",
-  running: "진행 중",
-  succeeded: "완료",
-  failed: "실패",
-  skipped: "건너뜀",
-};
 const SSH_KEY_BUNDLE_MAGIC = [0x41, 0x53, 0x4b, 0x31];
 const SSH_KEY_ENCRYPTION_CONTEXT = "ablestack-api:ssh-key-bundle:v1";
 const SSH_KEY_BUNDLE_DEFAULT_SECRET = "ablestack-api-ssh-key-bundle-default-secret-v1";
@@ -360,10 +356,34 @@ function parseClusterConfigFile(text: string) {
   const mngtNic = isRecord(clusterConfig.mngtNic) ? clusterConfig.mngtNic : {};
   const explicitTimeServers = stringList(clusterConfig.timeServers);
   const hostTimeServers = hostRows.map((host) => host.hostIp || host.hostName).filter(Boolean);
+  const pcsCluster = isRecord(clusterConfig.pcsCluster) ? clusterConfig.pcsCluster : {};
+  const pcsClusterAddresses = (() => {
+    const arrayValues = Array.isArray(pcsCluster.hostnames)
+      ? pcsCluster.hostnames
+      : Array.isArray(pcsCluster.hosts)
+        ? pcsCluster.hosts
+        : null;
+
+    if (arrayValues) return arrayValues.map(outputText).filter(Boolean);
+
+    return Object.entries(pcsCluster)
+      .map(([key, value]) => {
+        const match = /^hostname(\d+)$/.exec(key);
+        return match ? { index: Number(match[1]), value: outputText(value) } : null;
+      })
+      .filter((item): item is { index: number; value: string } => Boolean(item?.value))
+      .sort((left, right) => left.index - right.index)
+      .map((item) => item.value);
+  })();
+  const pcsNodeIpSource: PcsNodeIpSource = pcsClusterAddresses.length > 0 &&
+    pcsClusterAddresses.every((address, index) => address === hostRows[index]?.hostIp)
+    ? "ablecube"
+    : "ablecubePn";
 
   return {
     clusterType: normalizeClusterType(clusterConfig.type),
     hostRows,
+    pcsNodeIpSource,
     ccvmMgmtIp: outputText(ccvm.ip),
     mgmtCidr: outputText(mngtNic.cidr) || outputText(ccvm.cidr),
     mgmtGateway: outputText(mngtNic.gw) || outputText(ccvm.gw),
@@ -408,18 +428,7 @@ function clusterStepStatus(job: DeployRunJob | null, phase: DeployPhase): string
 }
 
 function progressLabel(status: string) {
-  if (status === "succeeded") return <Label color="green">완료</Label>;
-  if (status === "failed") return <Label color="red">실패</Label>;
-  if (status === "skipped") return <Label color="cyan">건너뜀</Label>;
-  if (status === "running") {
-    return (
-      <Label color="blue" icon={<Spinner size="sm" aria-label="진행 중" />}>
-        진행 중
-      </Label>
-    );
-  }
-
-  return <Label color="grey">{STEP_STATUS_LABELS[status] ?? "대기"}</Label>;
+  return <WizardStepStatusLabel status={status} />;
 }
 
 export default function ClusterConfigPrepareWizardModal({
@@ -433,6 +442,8 @@ export default function ClusterConfigPrepareWizardModal({
   const [hostsFileMode, setHostsFileMode] = React.useState<RadioValue>("new");
   const [hosts, setHosts] = React.useState<ClusterHostRow[]>(DEFAULT_HOSTS);
   const [hostCount, setHostCount] = React.useState(3);
+	const [existingHostCount, setExistingHostCount] = React.useState(0);
+  const [pcsNodeIpSource, setPcsNodeIpSource] = React.useState<PcsNodeIpSource>("ablecubePn");
   const [isIscsiExclusive, setIsIscsiExclusive] = React.useState(false);
   const [currentHostname, setCurrentHostname] = React.useState("");
   const [currentHostIp, setCurrentHostIp] = React.useState("");
@@ -490,6 +501,8 @@ export default function ClusterConfigPrepareWizardModal({
     setHostsFileMode("new");
     setHosts(DEFAULT_HOSTS);
     setHostCount(3);
+	setExistingHostCount(0);
+    setPcsNodeIpSource("ablecubePn");
     setIsIscsiExclusive(false);
     setCurrentHostname("");
     setCurrentHostIp("");
@@ -631,6 +644,7 @@ export default function ClusterConfigPrepareWizardModal({
     setExternalTimeServer("");
     setTimeServer1(currentHostIp);
     setTimeServer2("");
+    setPcsNodeIpSource("ablecubePn");
     setIsIscsiExclusive(false);
     setSecurityInternalToken("");
     setValidationMessage("");
@@ -690,9 +704,22 @@ export default function ClusterConfigPrepareWizardModal({
         setClusterType(fileConfig.clusterType);
       }
       if (fileConfig.hostRows.length > 0) {
-        setHosts(fileConfig.hostRows);
-        setHostCount(fileConfig.hostRows.length);
+		const rows = clusterHostMode === "add"
+		  ? [...fileConfig.hostRows, {
+		      hostName: currentHostname,
+		      hostIp: currentHostIp,
+		      storageIp: "",
+		      scvmMgmtIp: "",
+		      hostPnIp: "",
+		      scvmPnIp: "",
+		      scvmCnIp: "",
+		    }]
+		  : fileConfig.hostRows;
+		setExistingHostCount(clusterHostMode === "add" ? fileConfig.hostRows.length : 0);
+		setHosts(rows);
+		setHostCount(rows.length);
       }
+      setPcsNodeIpSource(fileConfig.pcsNodeIpSource);
       setCcvmMgmtIp(fileConfig.ccvmMgmtIp);
       setMgmtCidr(fileConfig.mgmtCidr);
       setMgmtGateway(fileConfig.mgmtGateway);
@@ -706,7 +733,7 @@ export default function ClusterConfigPrepareWizardModal({
     } catch {
       setValidationMessage("클러스터 구성 파일을 읽을 수 없습니다. cluster.json 형식을 확인해주세요.");
     }
-  }, [currentHostIp]);
+	}, [clusterHostMode, currentHostIp, currentHostname]);
 
   const readClusterConfigFile = (file: File) => {
     setHostsFilename(file.name);
@@ -889,10 +916,15 @@ export default function ClusterConfigPrepareWizardModal({
   const hostRoleLabel =
     hostRole === "master" ? "Master Server" : hostRole === "second" ? "Second Server" : "Other Server";
   const isVmLikeCluster = clusterType === "ablestack-vm" || clusterType === "ablestack-standalone";
+  const isHciCluster = clusterType === "ablestack-hci" || clusterType === "ablestack-hci-filesystem";
   const isStandalone = clusterType === "ablestack-standalone";
-  const isVmAddHost = clusterType === "ablestack-vm" && clusterHostMode === "add";
+  const isAddHost = clusterHostMode === "add";
+	const isHciAddHost = isHciCluster && isAddHost;
   const canUseAddHost = !isStandalone;
   const visibleHosts = hosts.slice(0, hostCount);
+  const pcsNodeAddress = (host: ClusterHostRow) => (
+    pcsNodeIpSource === "ablecube" ? host.hostIp : host.hostPnIp
+  );
   const applyTargetResults = clusterApplyTargetResults(deployJob);
 
   const timeServerCandidatesFromExistingClusterJson = React.useCallback((): string[] => {
@@ -928,7 +960,7 @@ export default function ClusterConfigPrepareWizardModal({
   const buildHostsPreview = () => {
     if (hostsFileText.trim()) return hostsFileText;
     const lines: string[] = [];
-    if (!isVmAddHost && ccvmMgmtIp) {
+    if (!isAddHost && ccvmMgmtIp) {
       lines.push(`${ccvmMgmtIp}\tccvm-mngt\tccvm`);
     }
     visibleHosts.forEach((row, index) => {
@@ -952,21 +984,26 @@ export default function ClusterConfigPrepareWizardModal({
 
   const buildClusterJsonPreview = () => {
     const internalToken = securityInternalToken.trim();
+    const pcsClusterHosts = isHciCluster
+      ? visibleHosts
+          .map((host) => pcsNodeAddress(host).trim())
+          .filter(Boolean)
+      : [];
 
     return JSON.stringify({
       clusterConfig: {
         type: clusterType,
         hostType: clusterHostMode,
         iscsiStorageExclusive: clusterType === "ablestack-vm" ? isIscsiExclusive : false,
-        ccvm: isVmAddHost ? undefined : { ip: ccvmMgmtIp },
-        mngtNic: isVmAddHost ? undefined : {
+        ccvm: isAddHost ? undefined : { ip: ccvmMgmtIp },
+		mngtNic: isAddHost ? undefined : {
           cidr: mgmtCidr,
           gw: mgmtGateway,
           dns: mgmtDns,
         },
-        pcsCluster: isVmLikeCluster ? undefined : {
-          hosts: visibleHosts.map((host) => host.hostPnIp).filter(Boolean),
-        },
+        pcsCluster: isVmLikeCluster ? undefined : Object.fromEntries(
+          pcsClusterHosts.map((address, index) => [`hostname${index + 1}`, address])
+        ),
         hosts: visibleHosts.map((host, index) => ({
           index: String(index + 1),
           hostname: host.hostName,
@@ -981,7 +1018,7 @@ export default function ClusterConfigPrepareWizardModal({
         })),
         external_timeserver: externalTimeServer || timeServer1,
         timeServers: [timeServer1, timeServer2].filter(Boolean),
-        ...(isVmAddHost ? {
+        ...(isAddHost ? {
           ipmi: {
             ip: ipmiIp,
             port: "623",
@@ -1046,7 +1083,7 @@ export default function ClusterConfigPrepareWizardModal({
       return isStandalone ? "단일 구성은 호스트 수가 1대여야 합니다." : "구성할 호스트 수는 3~99 범위로 입력해주세요.";
     }
 
-    if (hostsFileMode === "new") {
+	if (hostsFileMode === "new" || isAddHost) {
       for (let index = 0; index < visibleHosts.length; index += 1) {
         const row = visibleHosts[index];
         const hostLabel = `${index + 1}번 호스트`;
@@ -1065,9 +1102,15 @@ export default function ClusterConfigPrepareWizardModal({
           if (!isIpv4(row.scvmCnIp)) return `${hostLabel} SCVM CN IP 형식을 확인해주세요.`;
         }
       }
+
+      if (isHciCluster && visibleHosts.some((host) => !isIpv4(pcsNodeAddress(host)))) {
+        return pcsNodeIpSource === "ablecube"
+          ? "PCS 노드 주소로 사용할 호스트 IP 형식을 확인해주세요."
+          : "PCS 노드 주소로 사용할 호스트 PN IP 형식을 확인해주세요.";
+      }
     }
 
-    if (!isVmAddHost) {
+    if (!isAddHost) {
       const ccvmMessage = requireIpv4(ccvmMgmtIp, "CCVM 관리 IP");
       if (ccvmMessage) return ccvmMessage;
       if (!isIntegerInRange(mgmtCidr, 0, 32)) return "관리 NIC CIDR 범위는 0~32 입니다.";
@@ -1077,7 +1120,7 @@ export default function ClusterConfigPrepareWizardModal({
       if (dnsMessage) return dnsMessage;
     }
 
-    if (isVmAddHost) {
+    if (isAddHost) {
       const ipmiMessage = firstError(
         requireIpv4(ipmiIp, "IPMI IP"),
         requireValue(ipmiUser, "IPMI User를 입력해주세요."),
@@ -1091,7 +1134,7 @@ export default function ClusterConfigPrepareWizardModal({
     if (!isHostAddress(timeServer1)) return "시간 서버 1번 IP 정보를 확인해 주세요.";
     if (timeServer2.trim() && !isHostAddress(timeServer2)) return "시간 서버 2번 IP 정보를 확인해 주세요.";
 
-    if (hostsFileMode === "new") {
+	if (hostsFileMode === "new" || isAddHost) {
       const profileIps = visibleHosts.flatMap((row) => [
         row.hostIp,
         clusterType === "ablestack-vm" && isIscsiExclusive ? row.storageIp : "",
@@ -1125,7 +1168,7 @@ export default function ClusterConfigPrepareWizardModal({
       ? []
       : isVmLikeCluster
         ? visibleHosts.map((host) => host.hostIp.trim()).filter(Boolean)
-        : visibleHosts.map((host) => host.hostPnIp.trim()).filter(Boolean);
+        : visibleHosts.map((host) => pcsNodeAddress(host).trim()).filter(Boolean);
 
     return {
       mode: "partial",
@@ -1133,9 +1176,9 @@ export default function ClusterConfigPrepareWizardModal({
       update_system_profile: true,
       cluster: {
         action: "insert",
-        option: "local",
+		option: isAddHost ? "add" : "local",
         type: clusterType,
-        ...(!isVmAddHost ? {
+		...(!isAddHost ? {
           ccvm: { ip: ccvmMgmtIp.trim() },
           mngtNic: {
             cidr: mgmtCidr.trim(),
@@ -1152,8 +1195,8 @@ export default function ClusterConfigPrepareWizardModal({
             internal_token: internalToken,
           },
         } : {}),
-        ...(isVmAddHost ? {
-          new_hostname: visibleHosts[0]?.hostName.trim() ?? "",
+		...(isAddHost ? {
+		  new_hostname: visibleHosts[existingHostCount]?.hostName.trim() ?? currentHostname.trim(),
         } : {}),
       },
     };
@@ -1161,7 +1204,7 @@ export default function ClusterConfigPrepareWizardModal({
 
   const progressRows = (): ClusterProgressRow[] => {
     const clusterApply = findJobStep(deployJob, "cluster_apply");
-    const clusterApplySuccessMessage = isVmAddHost
+	const clusterApplySuccessMessage = isAddHost
       ? "클러스터 구성 파일 및 Hosts 파일 적용과 PCS 호스트 추가 설정이 완료되었습니다."
       : "클러스터 구성 파일 및 Hosts 파일 적용이 완료되었습니다.";
     const clusterApplyMessage = (() => {
@@ -1199,7 +1242,11 @@ export default function ClusterConfigPrepareWizardModal({
       },
       {
         id: "cluster_apply",
-        label: isVmAddHost ? "Cluster Config 및 Hosts 파일 생성 및 PCS 호스트 추가 설정" : "Cluster Config 및 Hosts 파일 생성",
+		label: isHciAddHost
+		  ? "신규 호스트 및 SCVM 프로파일 추가"
+		  : isAddHost
+		    ? "Cluster Config 및 Hosts 파일 생성 및 PCS 호스트 추가 설정"
+		    : "Cluster Config 및 Hosts 파일 생성",
         status: applyStatus,
         message: clusterApplyMessage,
       },
@@ -1232,7 +1279,7 @@ export default function ClusterConfigPrepareWizardModal({
     const normalized = message.toLowerCase();
 
     if (!message || normalized === "ok" || normalized === "apply success" || normalized === "success") {
-      return isVmAddHost
+		return isAddHost
         ? "클러스터 구성 파일 및 Hosts 파일 적용과 PCS 호스트 추가 설정이 완료되었습니다."
         : "클러스터 구성 파일 및 Hosts 파일 적용이 완료되었습니다.";
     }
@@ -1477,13 +1524,16 @@ export default function ClusterConfigPrepareWizardModal({
           </tr>
         </thead>
         <tbody>
-          {visibleHosts.map((row, idx) => (
+		  {visibleHosts.map((row, idx) => {
+			const isExistingRow = isAddHost && idx < existingHostCount;
+			return (
             <tr key={`cluster-host-row-${idx}`}>
               <td>{idx + 1}</td>
               <td>
                 <TextInput
                   aria-label={`호스트명 ${idx + 1}`}
                   value={row.hostName}
+				  isDisabled={isExistingRow}
                   onChange={(_event, value) => updateHost(idx, "hostName", value)}
                 />
               </td>
@@ -1491,6 +1541,7 @@ export default function ClusterConfigPrepareWizardModal({
                 <TextInput
                   aria-label={`호스트 IP ${idx + 1}`}
                   value={row.hostIp}
+				  isDisabled={isExistingRow}
                   onChange={(_event, value) => updateHost(idx, "hostIp", value)}
                 />
               </td>
@@ -1499,6 +1550,7 @@ export default function ClusterConfigPrepareWizardModal({
                   <TextInput
                     aria-label={`스토리지 전용 IP ${idx + 1}`}
                     value={row.storageIp}
+					isDisabled={isExistingRow}
                     onChange={(_event, value) => updateHost(idx, "storageIp", value)}
                   />
                 </td>
@@ -1509,6 +1561,7 @@ export default function ClusterConfigPrepareWizardModal({
                     <TextInput
                       aria-label={`SCVM MNGT IP ${idx + 1}`}
                       value={row.scvmMgmtIp}
+					  isDisabled={isExistingRow}
                       onChange={(_event, value) => updateHost(idx, "scvmMgmtIp", value)}
                     />
                   </td>
@@ -1516,6 +1569,7 @@ export default function ClusterConfigPrepareWizardModal({
                     <TextInput
                       aria-label={`호스트 PN IP ${idx + 1}`}
                       value={row.hostPnIp}
+					  isDisabled={isExistingRow}
                       onChange={(_event, value) => updateHost(idx, "hostPnIp", value)}
                     />
                   </td>
@@ -1523,6 +1577,7 @@ export default function ClusterConfigPrepareWizardModal({
                     <TextInput
                       aria-label={`SCVM PN IP ${idx + 1}`}
                       value={row.scvmPnIp}
+					  isDisabled={isExistingRow}
                       onChange={(_event, value) => updateHost(idx, "scvmPnIp", value)}
                     />
                   </td>
@@ -1530,13 +1585,15 @@ export default function ClusterConfigPrepareWizardModal({
                     <TextInput
                       aria-label={`SCVM CN IP ${idx + 1}`}
                       value={row.scvmCnIp}
+					  isDisabled={isExistingRow}
                       onChange={(_event, value) => updateHost(idx, "scvmCnIp", value)}
                     />
                   </td>
                 </>
               )}
             </tr>
-          ))}
+			);
+		  })}
         </tbody>
       </table>
     </div>
@@ -1688,19 +1745,20 @@ export default function ClusterConfigPrepareWizardModal({
                   />
                 </div>
               </FormGroup>
-              <FormGroup label="SSH KEY 파일" isRequired fieldId="ssh-key-file">
-                {renderFileAttachControl({
-                  id: "ssh-key-file",
-                  inputRef: sshKeyFileInputRef,
-                  filename: sshKeyFilename,
-                  placeholder: "선택된 .dat 파일 없음",
-                  accept: ".dat",
-                  isDisabled: sshKeyMode === "new",
-                  onFileSelect: readSSHKeyFile,
-                  onClear: clearSSHKeyFile,
-                })}
-                {renderSSHKeyPreview()}
-              </FormGroup>
+              {sshKeyMode === "existing" && (
+                <FormGroup label="SSH KEY 파일" isRequired fieldId="ssh-key-file">
+                  {renderFileAttachControl({
+                    id: "ssh-key-file",
+                    inputRef: sshKeyFileInputRef,
+                    filename: sshKeyFilename,
+                    placeholder: "선택된 .dat 파일 없음",
+                    accept: ".dat",
+                    onFileSelect: readSSHKeyFile,
+                    onClear: clearSSHKeyFile,
+                  })}
+                  {renderSSHKeyPreview()}
+                </FormGroup>
+              )}
             </Form>
           </div>
         </WizardStep>
@@ -1794,11 +1852,27 @@ export default function ClusterConfigPrepareWizardModal({
                 </FormGroup>
               )}
 
+              {isHciCluster && (
+                <FormGroup label="노드 IP 기준" isRequired fieldId="pcs-node-ip-source">
+                  <FormSelect
+                    id="pcs-node-ip-source"
+                    value={pcsNodeIpSource}
+                    onChange={(_event, value) => setPcsNodeIpSource(value as PcsNodeIpSource)}
+                  >
+                    <FormSelectOption value="ablecube" label="Ablecube IP (관리망)" />
+                    <FormSelectOption value="ablecubePn" label="HOST PN (HPN)" />
+                  </FormSelect>
+                  <Content component="small">
+                    PCS 클러스터 노드 주소로 사용할 IP 항목을 선택합니다.
+                  </Content>
+                </FormGroup>
+              )}
+
               <FormGroup label="구성할 호스트 수" isRequired fieldId="host-count">
                 <div className="ct-cluster-config-wizard__stepper">
                   <Button
                     variant="control"
-                    isDisabled={hostsFileMode === "existing" || isStandalone}
+				  isDisabled={hostsFileMode === "existing" || isStandalone || isAddHost}
                     onClick={() => updateHostCount(hostCount - 1)}
                   >
                     -
@@ -1806,7 +1880,7 @@ export default function ClusterConfigPrepareWizardModal({
                   <div className="ct-cluster-config-wizard__stepper-value">{hostCount}</div>
                   <Button
                     variant="control"
-                    isDisabled={hostsFileMode === "existing" || isStandalone}
+					isDisabled={hostsFileMode === "existing" || isStandalone || isAddHost}
                     onClick={() => updateHostCount(hostCount + 1)}
                   >
                     +
@@ -1817,7 +1891,7 @@ export default function ClusterConfigPrepareWizardModal({
 
               {renderHostTable()}
 
-              {!isVmAddHost && (
+			  {!isAddHost && (
                 <>
                   <FormGroup label="CCVM 관리 IP" isRequired fieldId="ccvm-ip">
                     <TextInput id="ccvm-ip" value={ccvmMgmtIp} onChange={(_event, value) => setCcvmMgmtIp(value)} isDisabled={hostsFileMode === "existing"} />
@@ -1834,7 +1908,7 @@ export default function ClusterConfigPrepareWizardModal({
                 </>
               )}
 
-              {isVmAddHost && (
+			  {isAddHost && (
                 <div className="ct-cluster-config-wizard__field-group">
                   <div className="ct-cluster-config-wizard__field-group-title">추가할 호스트 정보</div>
                   <FormGroup label="IPMI IP" isRequired fieldId="ipmi-ip">
@@ -1959,12 +2033,19 @@ export default function ClusterConfigPrepareWizardModal({
                         <DescriptionListTerm>SSH Key 준비 방법</DescriptionListTerm>
                         <DescriptionListDescription>{sshKeyModeLabel}</DescriptionListDescription>
                       </DescriptionListGroup>
-                      <DescriptionListGroup>
-                        <DescriptionListTerm>SSH KEY 파일</DescriptionListTerm>
-                        <DescriptionListDescription>
-                          {renderSSHKeyPreview(true)}
-                        </DescriptionListDescription>
-                      </DescriptionListGroup>
+                      {sshKeyMode === "existing" ? (
+                        <DescriptionListGroup>
+                          <DescriptionListTerm>SSH KEY 파일</DescriptionListTerm>
+                          <DescriptionListDescription>
+                            {renderSSHKeyPreview(true)}
+                          </DescriptionListDescription>
+                        </DescriptionListGroup>
+                      ) : (
+                        <DescriptionListGroup>
+                          <DescriptionListTerm>SSH KEY 생성</DescriptionListTerm>
+                          <DescriptionListDescription>배포 시작 시 자동 생성합니다.</DescriptionListDescription>
+                        </DescriptionListGroup>
+                      )}
                     </DescriptionList>
                   </div>
                 )}
@@ -1998,6 +2079,14 @@ export default function ClusterConfigPrepareWizardModal({
                           <DescriptionListDescription>{isIscsiExclusive ? "사용" : "미사용"}</DescriptionListDescription>
                         </DescriptionListGroup>
                       )}
+                      {isHciCluster && (
+                        <DescriptionListGroup>
+                          <DescriptionListTerm>노드 IP 기준</DescriptionListTerm>
+                          <DescriptionListDescription>
+                            {pcsNodeIpSource === "ablecube" ? "Ablecube IP (관리망)" : "HOST PN (HPN)"}
+                          </DescriptionListDescription>
+                        </DescriptionListGroup>
+                      )}
                       <DescriptionListGroup>
                         <DescriptionListTerm>클러스터 구성 프로파일</DescriptionListTerm>
                         <DescriptionListDescription>
@@ -2010,7 +2099,7 @@ export default function ClusterConfigPrepareWizardModal({
                           />
                         </DescriptionListDescription>
                       </DescriptionListGroup>
-                      {!isVmAddHost && (
+					  {!isAddHost && (
                         <>
                           <DescriptionListGroup>
                             <DescriptionListTerm>CCVM 관리 IP</DescriptionListTerm>
@@ -2030,7 +2119,7 @@ export default function ClusterConfigPrepareWizardModal({
                           </DescriptionListGroup>
                         </>
                       )}
-                      {isVmAddHost && (
+					  {isAddHost && (
                         <>
                           <DescriptionListGroup>
                             <DescriptionListTerm>IPMI IP</DescriptionListTerm>
@@ -2114,9 +2203,12 @@ export default function ClusterConfigPrepareWizardModal({
             )}
             <div className="ct-cluster-config-wizard__status-list">
               {progressRows().map((row) => (
-                <div key={row.id} className={`ct-cluster-config-wizard__status-row ct-cluster-config-wizard__status-row--${row.status}`}>
+                <div
+                  key={row.id}
+                  className={`ct-cluster-config-wizard__status-row ct-cluster-config-wizard__status-row--${row.status} ${wizardStatusRowClass(row.status)}`}
+                >
                   {progressLabel(row.status)}
-                  <span>{row.label}</span>
+                  <span className="ct-wizard-status-row__text">{row.label}</span>
                   {row.message && <small>{row.message}</small>}
                 </div>
               ))}

@@ -216,6 +216,11 @@
   border-radius: 14px;
 }
 
+.ct-gfs-storage-wizard__deploy-message {
+  margin-top: 18px;
+  padding: 14px 16px;
+}
+
 .ct-gfs-storage-wizard__review-accordion {
   margin-top: 16px;
   display: flex;
@@ -267,7 +272,7 @@
   gap: 12px;
 }
 
-.ct-gfs-storage-wizard__status-list div {
+.ct-gfs-storage-wizard__status-list > div {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -333,6 +338,12 @@
   .pf-v6-c-button {
     min-inline-size: 220px;
   }
+}
+
+.ct-gfs-storage-wizard__external-sync-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
 }
 
 .ct-gfs-storage-wizard__sync-message {

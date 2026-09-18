@@ -31,6 +31,7 @@ import MaintenanceModeConfirmModal from "../components/common/MaintenanceModeCon
 import type { MaintenanceModeAction } from "../components/common/MaintenanceModeConfirmModal";
 import ActionProgressModal from "../components/common/ActionProgressModal";
 import type { ActionProgressPhase } from "../components/common/ActionProgressModal";
+import SelectActionModal from "../components/common/SelectActionModal";
 import { useStatusPolling } from "../hooks/useStatusPolling";
 import {
   fetchStorageClusterStatus,
@@ -41,10 +42,23 @@ import {
 } from "../services/api/storage-cluster-status";
 import {
   formatMultipathSyncAction,
+  formatMultipathSyncCompletedMessage,
+  formatMultipathSyncProgressMessage,
   runMultipathSync,
-  summarizeMultipathSyncResult,
   type MultipathSyncAction,
 } from "../services/api/multipath-sync";
+import { fetchDiskInventory, type DiskInventoryOption } from "../services/api/inventory";
+import {
+  createClvmDisks,
+  deleteClvmDisks,
+  listGfsHosts,
+  listClvmDisks,
+  removeClusterHost,
+  runAutoShutdownStep,
+  type ClvmDisk,
+  type GfsHost,
+} from "../services/api/card-actions";
+import { controlCloudCenterVm } from "../services/api/cloud-cluster-status";
 import {
   DotStatus,
   InfoGrid,
@@ -69,7 +83,7 @@ const CLUSTER_STATUS_META = {
   },
 };
 
-export default function StorageClusterStatus() {
+export default function StorageClusterStatus({ pollingEnabled = true }: { pollingEnabled?: boolean }) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [isMaintenance, setIsMaintenance] = React.useState(false);
   const [maintenanceModeToConfirm, setMaintenanceModeToConfirm] =
@@ -110,7 +124,17 @@ export default function StorageClusterStatus() {
   const [isWwnListModalOpen, setIsWwnListModalOpen] = React.useState(false);
   const [isAutoShutdownModalOpen, setIsAutoShutdownModalOpen] = React.useState(false);
   const [isRemoveCubeHostModalOpen, setIsRemoveCubeHostModalOpen] = React.useState(false);
+	const [clusterHosts, setClusterHosts] = React.useState<GfsHost[]>([]);
   const [isHealthChecksModalOpen, setIsHealthChecksModalOpen] = React.useState(false);
+  const [availableDisks, setAvailableDisks] = React.useState<DiskInventoryOption[]>([]);
+  const [clvmDisks, setClvmDisks] = React.useState<ClvmDisk[]>([]);
+  const [isDiskListLoading, setIsDiskListLoading] = React.useState(false);
+  const [systemProgress, setSystemProgress] = React.useState<{
+    isOpen: boolean;
+    title: string;
+    phase: ActionProgressPhase;
+    message: string;
+  }>({ isOpen: false, title: "", phase: "running", message: "" });
 
   const handleStatusLoad = React.useCallback((nextData: StorageClusterStatusData) => {
     setIsMaintenance(nextData.maintenanceStatus);
@@ -119,9 +143,10 @@ export default function StorageClusterStatus() {
     console.error("storage cluster status API error:", error);
     setIsMaintenance(false);
   }, []);
-  const { data, isCollecting } = useStatusPolling({
+  const { data, isCollecting, refresh } = useStatusPolling({
     fetcher: fetchStorageClusterStatus,
     fallback: STORAGE_CLUSTER_STATUS_FALLBACK,
+    enabled: pollingEnabled,
     onSuccess: handleStatusLoad,
     onError: handleStatusError,
   });
@@ -216,7 +241,7 @@ export default function StorageClusterStatus() {
     setGlueUpdateProgress({
       isOpen: true,
       phase: "running",
-      message: "전체 호스트 Glue 설정 업데이트를 진행중입니다.",
+      message: "전체 호스트 Glue 설정 업데이트를 진행하고 있습니다.",
     });
 
     try {
@@ -258,17 +283,17 @@ export default function StorageClusterStatus() {
       isOpen: true,
       title,
       phase: "running",
-      message: `${title}을 실행하고 있습니다.`,
+      message: formatMultipathSyncProgressMessage(action),
     });
 
     try {
-      const result = await runMultipathSync(action);
+      await runMultipathSync(action);
 
       setMultipathProgress({
         isOpen: true,
         title,
         phase: "success",
-        message: summarizeMultipathSyncResult(result, `${title}이 완료되었습니다.`),
+        message: formatMultipathSyncCompletedMessage(action),
       });
     } catch (error) {
       console.error("multipath sync API error:", error);
@@ -306,9 +331,28 @@ export default function StorageClusterStatus() {
     void runExternalStorageAction("rescan");
   };
 
-  const openClvmDiskActionModal = (action: ClvmDiskAction) => {
+  const openClvmDiskActionModal = async (action: ClvmDiskAction) => {
     setClvmDiskAction(action);
     setIsOpen(false);
+    setIsDiskListLoading(true);
+    try {
+      const [inventory, configured] = await Promise.all([
+        action === "add" ? fetchDiskInventory("gfs") : Promise.resolve([]),
+        listClvmDisks(),
+      ]);
+      setAvailableDisks(inventory);
+      setClvmDisks(configured);
+    } catch (error) {
+      setSystemProgress({
+        isOpen: true,
+        title: "CLVM 디스크 목록 조회",
+        phase: "error",
+        message: error instanceof Error ? error.message : "CLVM 디스크 목록 조회에 실패했습니다.",
+      });
+      setClvmDiskAction(null);
+    } finally {
+      setIsDiskListLoading(false);
+    }
   };
 
   const closeClvmDiskActionModal = () => {
@@ -316,9 +360,23 @@ export default function StorageClusterStatus() {
   };
 
   const confirmClvmDiskAction = (action: Exclude<ClvmDiskAction, "info">, selectedIds: string[]) => {
-    // TODO: 백엔드 API 전환 후 add는 --create-clvm, delete는 --delete-clvm 호출로 연결합니다.
-    console.log("CLVM disk action", action, selectedIds);
     setClvmDiskAction(null);
+    const title = action === "add" ? "CLVM 디스크 추가" : "CLVM 디스크 삭제";
+    setSystemProgress({ isOpen: true, title, phase: "running", message: `${title} 작업을 실행하고 있습니다.` });
+    const request = action === "add"
+      ? createClvmDisks(selectedIds)
+      : deleteClvmDisks(clvmDisks.filter((disk) => selectedIds.includes(disk.vgName)));
+    void request.then(async () => {
+      await refresh();
+      setSystemProgress({ isOpen: true, title, phase: "success", message: `${title}가 완료되었습니다.` });
+    }).catch((error) => {
+      setSystemProgress({
+        isOpen: true,
+        title,
+        phase: "error",
+        message: error instanceof Error ? error.message : `${title}에 실패했습니다.`,
+      });
+    });
   };
 
   const openWwnListModal = () => {
@@ -339,23 +397,67 @@ export default function StorageClusterStatus() {
     setIsAutoShutdownModalOpen(false);
   };
 
-  const confirmAutoShutdown = () => {
-    // TODO: 백엔드 API 전환 후 auto-shutdown.py의 cloud VM stop, noout set, SCVM stop, host shutdown 순서로 연결합니다.
+  const confirmAutoShutdown = async () => {
     setIsAutoShutdownModalOpen(false);
+    const title = "전체 시스템 종료 절차";
+    setSystemProgress({ isOpen: true, title, phase: "running", message: "클라우드센터VM을 정지하고 있습니다." });
+    try {
+      await controlCloudCenterVm("stop");
+      setSystemProgress({ isOpen: true, title, phase: "running", message: "스토리지 클러스터를 유지보수 모드로 전환하고 있습니다." });
+      await updateStorageClusterMaintenanceMode("set");
+      setSystemProgress({ isOpen: true, title, phase: "running", message: "마운트를 확인하고 스토리지센터VM을 정지하고 있습니다." });
+      await runAutoShutdownStep("check_mount");
+      await runAutoShutdownStep("stop_scvms");
+      setSystemProgress({ isOpen: true, title, phase: "running", message: "전체 호스트 종료를 요청하고 있습니다." });
+      await runAutoShutdownStep("shutdown_hosts");
+      setSystemProgress({ isOpen: true, title, phase: "success", message: "전체 호스트에 종료 요청을 전송했습니다." });
+    } catch (error) {
+      setSystemProgress({
+        isOpen: true,
+        title,
+        phase: "error",
+        message: error instanceof Error ? error.message : "전체 시스템 종료 절차에 실패했습니다.",
+      });
+    }
   };
 
-  const openRemoveCubeHostModal = () => {
-    setIsRemoveCubeHostModalOpen(true);
+  const openRemoveCubeHostModal = async () => {
     setIsOpen(false);
+    try {
+      setClusterHosts(await listGfsHosts());
+      setIsRemoveCubeHostModalOpen(true);
+    } catch (error) {
+      setSystemProgress({
+        isOpen: true,
+        title: "HCI 호스트 제거",
+        phase: "error",
+        message: error instanceof Error ? error.message : "클러스터 호스트 목록 조회에 실패했습니다.",
+      });
+    }
   };
 
   const closeRemoveCubeHostModal = () => {
     setIsRemoveCubeHostModalOpen(false);
   };
 
-  const confirmRemoveCubeHost = () => {
-    // TODO: 백엔드 API 전환 후 python/cluster/remove_cube_host.py remove 호출로 연결합니다.
+  const confirmRemoveCubeHost = async (hostname: string) => {
     setIsRemoveCubeHostModalOpen(false);
+    const title = "HCI 호스트 제거";
+    setSystemProgress({ isOpen: true, title, phase: "running", message: `${hostname} 호스트 제거 Job을 시작하고 있습니다.` });
+    try {
+      await removeClusterHost(hostname, (message) => {
+        setSystemProgress({ isOpen: true, title, phase: "running", message });
+      });
+      await refresh();
+      setSystemProgress({ isOpen: true, title, phase: "success", message: `${hostname} 호스트와 SCVM이 HCI 클러스터에서 제거되었습니다.` });
+    } catch (error) {
+      setSystemProgress({
+        isOpen: true,
+        title,
+        phase: "error",
+        message: error instanceof Error ? error.message : "Cube 호스트 제거에 실패했습니다.",
+      });
+    }
   };
 
   const closeHealthChecksModal = () => {
@@ -587,6 +689,9 @@ export default function StorageClusterStatus() {
       <ClvmDiskActionModal
         action={clvmDiskAction}
         isOpen={clvmDiskAction !== null}
+        availableDisks={availableDisks}
+        clvmDisks={clvmDisks}
+        isLoading={isDiskListLoading}
         onClose={closeClvmDiskActionModal}
         onConfirm={confirmClvmDiskAction}
       />
@@ -606,12 +711,26 @@ export default function StorageClusterStatus() {
         onConfirm={confirmAutoShutdown}
       />
 
-      <CheckedConfirmActionModal
+      <ActionProgressModal
+        isOpen={systemProgress.isOpen}
+        title={systemProgress.title}
+        phase={systemProgress.phase}
+        message={systemProgress.message}
+        onClose={() => setSystemProgress((current) => ({ ...current, isOpen: false }))}
+      />
+
+      <SelectActionModal
         isOpen={isRemoveCubeHostModalOpen}
-        title="Cube 호스트 제거"
-        message="Cube 호스트 제거를 진행하시겠습니까?"
-        warning="주의!! 실행하실 경우 cube 호스트 설정정보가 초기화 됩니다."
-        checkLabel="Cube 호스트 제거 확인"
+        title="HCI 호스트 제거"
+        message="제거할 호스트를 선택해 주세요. Ceph 데이터 이동이 완료된 후 SCVM과 호스트 구성이 제거됩니다."
+        selectLabel="호스트"
+        options={clusterHosts.map((host) => ({
+          value: host.hostname,
+          label: host.address ? `${host.hostname} (${host.address})` : host.hostname,
+        }))}
+        warning="호스트 제거 시 해당 호스트에서 실행 중인 가상머신은 다른 정상 호스트로 마이그레이션되고 Ceph 데이터 이동이 완료된 후 해당 호스트와 SCVM이 클러스터에서 삭제됩니다. 현재 화면을 제공하는 호스트 자신은 제거할 수 없으므로 다른 정상 호스트에서 실행해 주세요."
+        checkLabel="가상머신 마이그레이션과 호스트 및 SCVM 삭제 내용을 확인했습니다."
+        confirmLabel="호스트 제거"
         onClose={closeRemoveCubeHostModal}
         onConfirm={confirmRemoveCubeHost}
       />

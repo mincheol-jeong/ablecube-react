@@ -18,11 +18,17 @@ import {
 } from "./status-loading";
 import ConfirmActionModal from "../components/common/ConfirmActionModal";
 import VmResourceUpdateModal from "../components/common/VmResourceUpdateModal";
+import ActionProgressModal from "../components/common/ActionProgressModal";
+import type { ActionProgressPhase } from "../components/common/ActionProgressModal";
 import { useStatusPolling } from "../hooks/useStatusPolling";
 import {
   fetchStorageVmStatus,
   STORAGE_VM_STATUS_FALLBACK,
 } from "../services/api/storage-vm-status";
+import {
+  controlStorageVm,
+  updateStorageVmResources,
+} from "../services/api/card-actions";
 import {
   CardDivider,
   compactDiskUsage,
@@ -73,17 +79,24 @@ const STORAGE_VM_ACTIONS: Record<StorageVmAction, { title: string; message: stri
   },
 };
 
-export default function StorageVmStatus() {
+export default function StorageVmStatus({ pollingEnabled = true }: { pollingEnabled?: boolean }) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [confirmAction, setConfirmAction] = React.useState<StorageVmAction | null>(null);
   const [isResourceUpdateModalOpen, setIsResourceUpdateModalOpen] = React.useState(false);
+  const [actionProgress, setActionProgress] = React.useState<{
+    isOpen: boolean;
+    title: string;
+    phase: ActionProgressPhase;
+    message: string;
+  }>({ isOpen: false, title: "", phase: "running", message: "" });
 
   const handleStatusError = React.useCallback((error: unknown) => {
     console.error("storage vm status API error:", error);
   }, []);
-  const { data, isCollecting } = useStatusPolling({
+  const { data, isCollecting, refresh } = useStatusPolling({
     fetcher: fetchStorageVmStatus,
     fallback: STORAGE_VM_STATUS_FALLBACK,
+    enabled: pollingEnabled,
     onError: handleStatusError,
   });
 
@@ -122,11 +135,28 @@ export default function StorageVmStatus() {
     setConfirmAction(null);
   };
 
+  const runAction = async (title: string, action: () => Promise<unknown>) => {
+    setActionProgress({ isOpen: true, title, phase: "running", message: `${title} 작업을 실행하고 있습니다.` });
+    try {
+      await action();
+      await refresh();
+      setActionProgress({ isOpen: true, title, phase: "success", message: `${title}이 완료되었습니다.` });
+    } catch (error) {
+      setActionProgress({
+        isOpen: true,
+        title,
+        phase: "error",
+        message: error instanceof Error ? error.message : `${title}에 실패했습니다.`,
+      });
+    }
+  };
+
   const confirmStorageVmAction = () => {
     if (!confirmAction) return;
-    // TODO: 백엔드 API 전환 후 storage-vm-status-update.py start/stop/delete 또는 create_address.py 호출로 연결합니다.
-    console.log("storage vm action", confirmAction);
+    const action = confirmAction;
+    const title = `스토리지센터VM ${STORAGE_VM_ACTIONS[action].confirmLabel}`;
     setConfirmAction(null);
+    void runAction(title, () => controlStorageVm(action));
   };
 
   const openResourceUpdateModal = () => {
@@ -139,9 +169,11 @@ export default function StorageVmStatus() {
   };
 
   const confirmResourceUpdate = (cpu: string, memory: string) => {
-    // TODO: 백엔드 API 전환 후 storage-vm-resource-update.py에 해당하는 자원변경 API로 연결합니다.
-    console.log("storage vm resource update", cpu, memory);
     setIsResourceUpdateModalOpen(false);
+    void runAction(
+      "스토리지센터VM 자원변경",
+      () => updateStorageVmResources(cpu, memory)
+    );
   };
 
   return (
@@ -274,7 +306,7 @@ export default function StorageVmStatus() {
           isOpen={confirmAction !== null}
           title={currentConfirmAction.title}
           message={currentConfirmAction.message}
-          confirmLabel={currentConfirmAction.confirmLabel}
+          {...(currentConfirmAction.confirmLabel ? { confirmLabel: currentConfirmAction.confirmLabel } : {})}
           onClose={closeConfirmActionModal}
           onConfirm={confirmStorageVmAction}
         />
@@ -285,6 +317,14 @@ export default function StorageVmStatus() {
         title="스토리지센터 가상머신 자원변경"
         onClose={closeResourceUpdateModal}
         onConfirm={confirmResourceUpdate}
+      />
+
+      <ActionProgressModal
+        isOpen={actionProgress.isOpen}
+        title={actionProgress.title}
+        phase={actionProgress.phase}
+        message={actionProgress.message}
+        onClose={() => setActionProgress((current) => ({ ...current, isOpen: false }))}
       />
     </Card>
   );

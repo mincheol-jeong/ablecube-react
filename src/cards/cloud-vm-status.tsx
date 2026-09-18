@@ -20,11 +20,21 @@ import ConfirmActionModal from "../components/common/ConfirmActionModal";
 import SelectActionModal from "../components/common/SelectActionModal";
 import TextInputConfirmModal from "../components/common/TextInputConfirmModal";
 import VmResourceUpdateModal from "../components/common/VmResourceUpdateModal";
+import ActionProgressModal from "../components/common/ActionProgressModal";
+import type { ActionProgressPhase } from "../components/common/ActionProgressModal";
 import { useStatusPolling } from "../hooks/useStatusPolling";
 import {
   CLOUD_VM_STATUS_FALLBACK,
   fetchCloudVmStatus,
 } from "../services/api/cloud-vm-status";
+import {
+  controlCloudVmService,
+  listCloudVmSnapshots,
+  resizeCloudVmSecondary,
+  runCloudVmDbBackup,
+  runCloudVmSnapshot,
+  updateCloudVmResources,
+} from "../services/api/card-actions";
 import {
   CardDivider,
   compactDiskUsage,
@@ -97,10 +107,7 @@ CloudVmSelectAction,
     title: "클라우드센터VM 스냅샷 복구",
     message: "복구할 스냅샷을 선택해주세요.",
     selectLabel: "스냅샷 목록",
-    options: [
-      { value: "snap-20260521-0100", label: "snap-20260521-0100" },
-      { value: "snap-20260520-0100", label: "snap-20260520-0100" },
-    ],
+    options: [],
     warning: "스냅샷 복구 후에는 현재 상태로 돌아갈 수 없습니다.",
   },
   dbBackup: {
@@ -109,25 +116,33 @@ CloudVmSelectAction,
     selectLabel: "백업 작업",
     options: [
       { value: "instantBackup", label: "즉시 백업" },
-      { value: "regularBackup", label: "정기 백업" },
-      { value: "deleteOldBackup", label: "백업파일 삭제관리" },
+      { value: "regularBackup", label: "정기 백업 (매일 02:00)" },
+      { value: "deleteOldBackup", label: "백업파일 삭제관리 (30일, 매일 03:00)" },
     ],
   },
 };
 
-export default function CloudVmStatus() {
+export default function CloudVmStatus({ pollingEnabled = true }: { pollingEnabled?: boolean }) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [confirmAction, setConfirmAction] = React.useState<CloudVmConfirmAction | null>(null);
   const [selectAction, setSelectAction] = React.useState<CloudVmSelectAction | null>(null);
   const [isResourceUpdateModalOpen, setIsResourceUpdateModalOpen] = React.useState(false);
   const [isSecondarySizeModalOpen, setIsSecondarySizeModalOpen] = React.useState(false);
+  const [snapshotOptions, setSnapshotOptions] = React.useState<{ value: string; label: string }[]>([]);
+  const [actionProgress, setActionProgress] = React.useState<{
+    isOpen: boolean;
+    title: string;
+    phase: ActionProgressPhase;
+    message: string;
+  }>({ isOpen: false, title: "", phase: "running", message: "" });
 
   const handleStatusError = React.useCallback((error: unknown) => {
     console.error("cloud vm status API error:", error);
   }, []);
-  const { data, isCollecting } = useStatusPolling({
+  const { data, isCollecting, refresh } = useStatusPolling({
     fetcher: fetchCloudVmStatus,
     fallback: CLOUD_VM_STATUS_FALLBACK,
+    enabled: pollingEnabled,
     onError: handleStatusError,
   });
 
@@ -166,14 +181,45 @@ export default function CloudVmStatus() {
     setConfirmAction(null);
   };
 
-  const confirmCloudVmAction = () => {
-    if (!confirmAction) return;
-    // TODO: 백엔드 API 전환 후 local_ccvm_manage.py, ccvm_snap_action.py, create_address.py 호출로 연결합니다.
-    console.log("cloud vm action", confirmAction);
-    setConfirmAction(null);
+  const runAction = async (title: string, runningMessage: string, action: () => Promise<unknown>) => {
+    setActionProgress({ isOpen: true, title, phase: "running", message: runningMessage });
+    try {
+      await action();
+      await refresh();
+      setActionProgress({ isOpen: true, title, phase: "success", message: `${title}이 완료되었습니다.` });
+    } catch (error) {
+      setActionProgress({
+        isOpen: true,
+        title,
+        phase: "error",
+        message: error instanceof Error ? error.message : `${title}에 실패했습니다.`,
+      });
+    }
   };
 
-  const openSelectActionModal = (action: CloudVmSelectAction) => {
+  const confirmCloudVmAction = () => {
+    if (!confirmAction) return;
+    const title = CLOUD_VM_CONFIRM_ACTIONS[confirmAction].title;
+    setConfirmAction(null);
+    void runAction(title, "클라우드센터VM 스냅샷을 생성하고 있습니다.", () => runCloudVmSnapshot("backup"));
+  };
+
+  const openSelectActionModal = async (action: CloudVmSelectAction) => {
+    if (action === "snapshotRollback") {
+      try {
+        const snapshots = await listCloudVmSnapshots();
+        setSnapshotOptions(snapshots.map((snapshot) => ({ value: snapshot, label: snapshot })));
+      } catch (error) {
+        setActionProgress({
+          isOpen: true,
+          title: "스냅샷 목록 조회",
+          phase: "error",
+          message: error instanceof Error ? error.message : "스냅샷 목록 조회에 실패했습니다.",
+        });
+        setIsOpen(false);
+        return;
+      }
+    }
     setSelectAction(action);
     setIsOpen(false);
   };
@@ -184,9 +230,17 @@ export default function CloudVmStatus() {
 
   const confirmCloudVmSelectAction = (value: string) => {
     if (!selectAction) return;
-    // TODO: 백엔드 API 전환 후 Mold 제어, 스냅샷 복구, DB 백업, 모니터링 API로 연결합니다.
-    console.log("cloud vm select action", selectAction, value);
+    const action = selectAction;
+    const title = CLOUD_VM_SELECT_ACTIONS[action].title;
     setSelectAction(null);
+    const request = action === "moldService"
+      ? () => controlCloudVmService("mold.service", value)
+      : action === "moldDb"
+        ? () => controlCloudVmService("mysqld", value)
+        : action === "snapshotRollback"
+          ? () => runCloudVmSnapshot("rollback", value)
+          : () => runCloudVmDbBackup(value);
+    void runAction(title, `${title} 작업을 실행하고 있습니다.`, request);
   };
 
   const openResourceUpdateModal = () => {
@@ -199,9 +253,12 @@ export default function CloudVmStatus() {
   };
 
   const confirmResourceUpdate = (cpu: string, memory: string) => {
-    // TODO: 백엔드 API 전환 후 클라우드센터VM offering 변경 API로 연결합니다.
-    console.log("cloud vm resource update", cpu, memory);
     setIsResourceUpdateModalOpen(false);
+    void runAction(
+      "클라우드센터VM 자원변경",
+      "클라우드센터VM CPU와 Memory를 변경하고 있습니다.",
+      () => updateCloudVmResources(cpu, memory)
+    );
   };
 
   const openSecondarySizeModal = () => {
@@ -214,9 +271,22 @@ export default function CloudVmStatus() {
   };
 
   const confirmSecondarySize = (size: string) => {
-    // TODO: 백엔드 API 전환 후 Mold secondary resize API로 연결합니다.
-    console.log("mold secondary size expansion", size);
     setIsSecondarySizeModalOpen(false);
+    const addSize = Number(size);
+    if (!Number.isInteger(addSize) || addSize < 1 || addSize > 500) {
+      setActionProgress({
+        isOpen: true,
+        title: "Mold 세컨더리 용량 추가",
+        phase: "error",
+        message: "추가 용량은 1~500 사이의 정수로 입력해 주세요.",
+      });
+      return;
+    }
+    void runAction(
+      "Mold 세컨더리 용량 추가",
+      "Mold 세컨더리 디스크 용량을 확장하고 있습니다.",
+      () => resizeCloudVmSecondary(addSize)
+    );
   };
 
   return (
@@ -353,7 +423,7 @@ export default function CloudVmStatus() {
           isOpen={confirmAction !== null}
           title={currentConfirmAction.title}
           message={currentConfirmAction.message}
-          confirmLabel={currentConfirmAction.confirmLabel}
+          {...(currentConfirmAction.confirmLabel ? { confirmLabel: currentConfirmAction.confirmLabel } : {})}
           onClose={closeConfirmActionModal}
           onConfirm={confirmCloudVmAction}
         />
@@ -365,8 +435,8 @@ export default function CloudVmStatus() {
           title={currentSelectAction.title}
           message={currentSelectAction.message}
           selectLabel={currentSelectAction.selectLabel}
-          options={currentSelectAction.options}
-          warning={currentSelectAction.warning}
+          options={selectAction === "snapshotRollback" ? snapshotOptions : currentSelectAction.options}
+          {...(currentSelectAction.warning ? { warning: currentSelectAction.warning } : {})}
           onClose={closeSelectActionModal}
           onConfirm={confirmCloudVmSelectAction}
         />
@@ -391,6 +461,14 @@ export default function CloudVmStatus() {
         checkLabel="Mold 세컨더리 용량 추가 확인"
         onClose={closeSecondarySizeModal}
         onConfirm={confirmSecondarySize}
+      />
+
+      <ActionProgressModal
+        isOpen={actionProgress.isOpen}
+        title={actionProgress.title}
+        phase={actionProgress.phase}
+        message={actionProgress.message}
+        onClose={() => setActionProgress((current) => ({ ...current, isOpen: false }))}
       />
     </Card>
   );
